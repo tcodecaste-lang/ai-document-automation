@@ -715,12 +715,16 @@ export default function Home() {
 
                 <div className="preview-container">
                   {fileUrl ? (
-                    <iframe 
+                    <object 
                       key={fileUrl}
-                      src={fileUrl} 
+                      data={fileUrl} 
+                      type="application/pdf"
                       style={{ width: "100%", height: "100%", border: "none" }}
-                      title="PDF Document Preview"
-                    />
+                    >
+                      <div className="preview-placeholder">
+                        <span style={{ fontSize: "13px" }}>PDF preview not supported by browser. <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", color: "var(--accent-color)" }}>Open PDF in new tab</a></span>
+                      </div>
+                    </object>
                   ) : (
                     <div className="preview-placeholder">
                       <Spinner />
