@@ -132,7 +132,9 @@ export default function Home() {
       if (isLocalhost) {
         setApiUrl(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000");
       } else {
-        setApiUrl(process.env.NEXT_PUBLIC_API_URL || `${window.location.origin}/api/backend`);
+        const envUrl = process.env.NEXT_PUBLIC_API_URL;
+        const isEnvLocal = envUrl && (envUrl.includes("localhost") || envUrl.includes("127.0.0.1"));
+        setApiUrl(isEnvLocal ? `${window.location.origin}/api/backend` : (envUrl || `${window.location.origin}/api/backend`));
       }
     }
   }, []);
