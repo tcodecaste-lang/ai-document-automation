@@ -412,33 +412,20 @@ export default function Home() {
       // Look up field configuration/rules
       const isRequired = true; // All fields are currently required in the schema
       
-      // Check if field is applicable (dynamic for insurance accident fields)
-      let isApplicable = result.extracted_fields?.[fieldName]?.applicable !== false;
-      if (result.industry === "insurance" && fieldName === "accident_date") {
-        const currentPolicyType = updatedData["policy_type"];
-        const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-        // Also check if there was a pre-existing value extracted by the AI
-        const hasPreExistingVal = result.extracted_fields?.[fieldName]?.value !== null && result.extracted_fields?.[fieldName]?.value !== undefined;
-        isApplicable = isAccidentPol || hasPreExistingVal;
-        
-        // Sync back into metadata
-        if (updatedExtractedFields[fieldName]) {
-          updatedExtractedFields[fieldName] = {
-            ...updatedExtractedFields[fieldName],
-            applicable: isApplicable
-          };
-        } else {
-          updatedExtractedFields[fieldName] = {
-            value: val,
-            applicable: isApplicable
-          };
-        }
+      const currentPolicyType = updatedData["policy_type"];
+      const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
+      
+      let fieldLabel = fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      if (fieldName === "accident_date" && !isAccidentPol) {
+        fieldLabel = "Incident Date";
       }
+
+      let isApplicable = result.extracted_fields?.[fieldName]?.applicable !== false;
       
       if (!isApplicable) {
         updatedValidation[fieldName] = {
           valid: true,
-          message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} is not applicable to this document layout.`
+          message: `${fieldLabel} is not applicable to this document layout.`
         };
         return;
       }
@@ -446,7 +433,7 @@ export default function Home() {
       if (val === null || val === undefined || String(val).trim() === "") {
         updatedValidation[fieldName] = {
           valid: false,
-          message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} is empty.`
+          message: `${fieldLabel} is empty.`
         };
         allValid = false;
         return;
@@ -462,7 +449,7 @@ export default function Home() {
         if (!dateRegex.test(dateStr)) {
           updatedValidation[fieldName] = {
             valid: false,
-            message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} has an invalid date format: '${val}' (expected YYYY-MM-DD).`
+            message: `${fieldLabel} has an invalid date format: '${val}' (expected YYYY-MM-DD).`
           };
           allValid = false;
         } else {
@@ -471,13 +458,13 @@ export default function Home() {
           if (isNaN(d.getTime())) {
             updatedValidation[fieldName] = {
               valid: false,
-              message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} has an invalid calendar date: '${val}'.`
+              message: `${fieldLabel} has an invalid calendar date: '${val}'.`
             };
             allValid = false;
           } else {
             updatedValidation[fieldName] = {
               valid: true,
-              message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} is valid (${val}).`
+              message: `${fieldLabel} is valid (${val}).`
             };
           }
         }
@@ -489,13 +476,13 @@ export default function Home() {
         if (isNaN(num)) {
           updatedValidation[fieldName] = {
             valid: false,
-            message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} must be a valid number: '${val}'.`
+            message: `${fieldLabel} must be a valid number: '${val}'.`
           };
           allValid = false;
         } else {
           updatedValidation[fieldName] = {
             valid: true,
-            message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} is valid (${num}).`
+            message: `${fieldLabel} is valid (${num}).`
           };
         }
       } 
@@ -503,7 +490,7 @@ export default function Home() {
       else {
         updatedValidation[fieldName] = {
           valid: true,
-          message: `${fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} found.`
+          message: `${fieldLabel} found.`
         };
       }
     });
@@ -836,22 +823,22 @@ export default function Home() {
                     {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
                       const val = result.extracted_data[key];
                       
-                      // Dynamically compute applicability in UI render loop
-                      let isApplicable = result.extracted_fields?.[key]?.applicable !== false;
-                      if (selectedIndustry === "insurance" && key === "accident_date") {
-                        const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
-                        const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-                        const hasPreExistingVal = (val !== null && val !== undefined && val !== "") || (result.extracted_fields?.[key]?.value !== null && result.extracted_fields?.[key]?.value !== undefined);
-                        isApplicable = isAccidentPol || hasPreExistingVal;
+                      const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
+                      const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
+                      
+                      let displayName = key.replace(/_/g, " ");
+                      if (key === "accident_date") {
+                        displayName = isAccidentPol ? "Accident Date" : "Incident Date";
                       }
                       
+                      let isApplicable = result.extracted_fields?.[key]?.applicable !== false;
                       const isValid = result.validation[key]?.valid !== false;
                       
                       // 1. If not applicable, show the field as [Not Applicable]
                       if (!isApplicable) {
                         return (
                           <div key={key} className="data-row" style={{ opacity: 0.5 }}>
-                            <span className="data-label">{key.replace(/_/g, " ")}</span>
+                            <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
                             <span className="data-value" style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "13px" }}>[Not Applicable]</span>
                           </div>
                         );
@@ -860,7 +847,7 @@ export default function Home() {
                       return (
                         <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: "12px" }}>
                           <div className="data-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
-                            <span className="data-label">{key.replace(/_/g, " ")}</span>
+                            <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
                             <span className="data-value">
                               {val === null || val === "" || !isValid ? (
                                 <span style={{ color: "var(--invalid-color)", fontWeight: 600 }}>[Awaiting Input]</span>
@@ -938,7 +925,7 @@ export default function Home() {
                               ) : (
                                 <input 
                                   type="text" 
-                                  placeholder={`Enter ${key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}`}
+                                  placeholder={`Enter ${displayName.replace(/\b\w/g, c => c.toUpperCase())}`}
                                   className="form-input" 
                                   style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
                                   value={manualInputs[key] || ""} 
@@ -985,7 +972,13 @@ export default function Home() {
                         </span>
                         <div style={{ display: "flex", flexDirection: "column" }}>
                           <span style={{ fontSize: "13px", fontWeight: 600, textTransform: "capitalize" }}>
-                            {fieldName.replace(/_/g, " ")}
+                            {fieldName === "accident_date" ? (
+                              (() => {
+                                const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
+                                const isAccPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
+                                return isAccPol ? "Accident Date" : "Incident Date";
+                              })()
+                            ) : fieldName.replace(/_/g, " ")}
                           </span>
                           <span style={{ fontSize: "12px", color: validate.valid ? "var(--text-secondary)" : "#fca5a5" }}>
                             {validate.message}

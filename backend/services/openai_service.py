@@ -152,9 +152,7 @@ def mock_extraction_fallback(industry: str, text: str) -> dict:
     for field_name, field_info in fields.items():
         applicable = True
         
-        # For insurance, accident_date is only applicable if we detect claim keywords or accident-related policy types
-        if industry == "insurance" and field_name == "accident_date":
-            applicable = is_accident_related
+        # For insurance, accident_date is always applicable (representing accident/incident date)
             
         if not applicable:
             extracted_fields[field_name] = {
@@ -235,7 +233,7 @@ def extract_document_info(industry: str, text: str) -> dict:
         f"Analyze the document text for the '{industry}' industry.\n"
         "1. Identify the specific type of the document (e.g., 'Life Insurance Policy', 'Health Insurance Policy', 'Expense Receipt', 'Patient Registration Form').\n"
         f"2. For each expected field in the schema ({fields_list}), check if that field is applicable or relevant to this specific type of document layout.\n"
-        "   - E.g., for the 'insurance' industry: 'accident_date' is ONLY applicable (set applicable=true) if: (a) the document is an accident report or claim form, or (b) the document is a 'Travel Insurance', 'Personal Accident Insurance', 'Health Insurance', or 'Motor/Auto Insurance' policy. Otherwise, set applicable=false.\n"
+        "   - E.g., for the 'insurance' industry: 'accident_date' is always applicable (representing either the Accident Date or the Incident/Loss Date depending on the layout).\n"
         "3. Extract the value if present. If applicable but the information is missing from the document, set value=null and applicable=true.\n"
         "4. Do not invent, guess, or fabricate any details. Keep values null if not explicitly in the text."
     )
