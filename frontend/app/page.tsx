@@ -720,7 +720,6 @@ export default function Home() {
                       src={fileUrl} 
                       style={{ width: "100%", height: "100%", border: "none" }}
                       title="PDF Document Preview"
-                      sandbox="allow-scripts allow-same-origin"
                     />
                   ) : (
                     <div className="preview-placeholder">
