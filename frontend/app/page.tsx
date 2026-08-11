@@ -123,7 +123,19 @@ const Spinner = () => (
 );
 
 export default function Home() {
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  // Dynamic host-based API URL resolution to prevent CORS and mixed-content issues
+  const [apiUrl, setApiUrl] = useState("http://localhost:8000");
+  
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      if (isLocalhost) {
+        setApiUrl(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000");
+      } else {
+        setApiUrl(process.env.NEXT_PUBLIC_API_URL || `${window.location.origin}/api/backend`);
+      }
+    }
+  }, []);
 
   // App States
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -308,7 +320,7 @@ export default function Home() {
     formData.append("file", file);
 
     try {
-      const response = await fetch(`${API_URL}/api/process-document`, {
+      const response = await fetch(`${apiUrl}/api/process-document`, {
         method: "POST",
         body: formData
       });
