@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // frontend/app/page.tsx
 "use client";
 
@@ -125,20 +126,19 @@ const Spinner = () => (
 
 export default function Home() {
   // Dynamic host-based API URL resolution to prevent CORS and mixed-content issues
-  const [apiUrl, setApiUrl] = useState("http://localhost:8000");
-  
-  useEffect(() => {
+  const [apiUrl] = useState(() => {
     if (typeof window !== "undefined") {
       const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
       if (isLocalhost) {
-        setApiUrl(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000");
+        return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       } else {
         const envUrl = process.env.NEXT_PUBLIC_API_URL;
         const isEnvLocal = envUrl && (envUrl.includes("localhost") || envUrl.includes("127.0.0.1"));
-        setApiUrl(isEnvLocal ? `${window.location.origin}/api/backend` : (envUrl || `${window.location.origin}/api/backend`));
+        return isEnvLocal ? `${window.location.origin}/api/backend` : (envUrl || `${window.location.origin}/api/backend`);
       }
     }
-  }, []);
+    return "http://localhost:8000";
+  });
 
   // App States
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -432,9 +432,6 @@ export default function Home() {
     Object.keys(updatedValidation).forEach((fieldName) => {
       const val = updatedData[fieldName];
       
-      // Look up field configuration/rules
-      const isRequired = true; // All fields are currently required in the schema
-      
       const currentPolicyType = updatedData["policy_type"];
       const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
       
@@ -443,7 +440,7 @@ export default function Home() {
         fieldLabel = "Incident Date";
       }
 
-      let isApplicable = result.extracted_fields?.[fieldName]?.applicable !== false;
+      const isApplicable = result.extracted_fields?.[fieldName]?.applicable !== false;
       
       if (!isApplicable) {
         updatedValidation[fieldName] = {
@@ -990,7 +987,7 @@ export default function Home() {
                       ) : (
                         <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", padding: "12px", borderRadius: "8px", color: "#ef4444", fontSize: "13px", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
                           <span>⚠</span>
-                          <span>Missing or incorrect fields detected. Please correct them below, click 'Save / Update', and then download the updated PDF.</span>
+                          <span>Missing or incorrect fields detected. Please correct them below, click &apos;Save / Update&apos;, and then download the updated PDF.</span>
                         </div>
                       )}
 
@@ -1267,7 +1264,7 @@ export default function Home() {
                           displayName = isAccidentPol ? "Accident Date" : "Incident Date";
                         }
                         
-                        let isApplicable = result.extracted_fields?.[key]?.applicable !== false;
+                        const isApplicable = result.extracted_fields?.[key]?.applicable !== false;
                         const isValid = result.validation[key]?.valid !== false;
                         
                         // 1. If not applicable, show the field as [Not Applicable]
