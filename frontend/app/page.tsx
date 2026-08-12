@@ -1427,7 +1427,14 @@ export default function Home() {
               </div>
               <button 
                 className="btn-secondary" 
-                style={{ padding: "6px 12px", fontSize: "12px", borderColor: "rgba(239, 68, 68, 0.2)", color: "#fca5a5" }}
+                style={{ 
+                  padding: "6px 12px", 
+                  fontSize: "12px", 
+                  borderColor: "rgba(220, 38, 38, 0.4)", 
+                  color: "#b91c1c", 
+                  fontWeight: 600,
+                  background: "rgba(220, 38, 38, 0.04)" 
+                }}
                 onClick={handleClearHistory}
               >
                 <TrashIcon /> Clear Session
