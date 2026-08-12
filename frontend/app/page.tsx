@@ -637,6 +637,47 @@ export default function Home() {
     }
   };
 
+  const handleDownloadHistoryItemPdf = async (item: SessionResult) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/generate-pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          file_name: item.file_name,
+          industry: item.industry,
+          document_type: item.document_type,
+          extracted_data: item.extracted_data,
+          validation: item.validation,
+          overall_status: item.overall_status,
+          original_data: item.original_data || item.extracted_data
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to generate PDF summary.");
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      
+      let baseName = item.file_name;
+      if (baseName.toLowerCase().endsWith(".pdf")) {
+        baseName = baseName.slice(0, -4);
+      }
+      a.download = `${baseName}-updated.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      triggerError(err.message || "Failed to download PDF summary.");
+    }
+  };
+
   const handleUpdateAndRevalidate = () => {
     triggerRevalidateWithInputs(manualInputs);
   };
@@ -1261,22 +1302,7 @@ export default function Home() {
                     </p>
                   </div>
                   <div style={{ display: "flex", gap: "10px" }}>
-                    {result.overall_status === "ready_for_review" && (
-                      <button 
-                        className="btn-primary" 
-                        style={{ 
-                          padding: "8px 16px", 
-                          fontSize: "13px", 
-                          background: "var(--accent-gradient)",
-                          border: "none",
-                          boxShadow: "0 4px 12px rgba(99, 102, 241, 0.2)"
-                        }} 
-                        onClick={handleDownloadUpdatedPdf}
-                        disabled={isDownloading}
-                      >
-                        {isDownloading ? <Spinner /> : "Download PDF"}
-                      </button>
-                    )}
+
                     <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
                       Re-Process
                     </button>
@@ -1545,7 +1571,20 @@ export default function Home() {
                     <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                       {item.overall_status === "ready_for_review" ? "✓ Validated" : "⚠ Needs Review"}
                     </span>
-                    <span style={{ fontSize: "11px", color: "var(--accent-color)", fontWeight: 600 }}>Inspect &rarr;</span>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      {item.overall_status === "ready_for_review" && (
+                        <button 
+                          style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "11px", color: "var(--accent-color)", fontWeight: 600, textDecoration: "underline", padding: 0 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDownloadHistoryItemPdf(item);
+                          }}
+                        >
+                          Download
+                        </button>
+                      )}
+                      <span style={{ fontSize: "11px", color: "var(--accent-color)", fontWeight: 600 }}>Inspect &rarr;</span>
+                    </div>
                   </div>
                 </div>
               ))}
