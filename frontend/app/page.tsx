@@ -739,9 +739,13 @@ export default function Home() {
                 <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--accent-color)" }}>
                   {selectedIndustry} Config Activated
                 </span>
-                <h2 style={{ fontSize: "22px", fontWeight: 800, marginTop: "4px" }}>Upload Document for Analysis</h2>
+                <h2 style={{ fontSize: "22px", fontWeight: 800, marginTop: "4px" }}>
+                  {activeTab === "existing" ? "Validate Existing Data" : "Upload Document for Analysis"}
+                </h2>
                 <p style={{ fontSize: "13.5px", color: "var(--text-secondary)", marginTop: "6px" }}>
-                  Provide a text-based PDF (max 10MB) to run structural extraction.
+                  {activeTab === "existing" 
+                    ? "Upload an existing document containing previously collected information to identify missing or incorrect data." 
+                    : "Provide a text-based PDF (max 10MB) to run structural extraction."}
                 </p>
               </div>
 
@@ -773,13 +777,25 @@ export default function Home() {
               <div style={{ display: "flex", flexDirection: "column", gap: "12px", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "20px" }}>
                 <p style={{ fontSize: "13px", fontWeight: 500, color: "var(--text-secondary)" }}>OR use pre-generated test documents:</p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
-                  <button className="btn-secondary" style={{ flex: 1, minWidth: "160px", justifyContent: "center" }} onClick={() => handleLoadDemoPdf(false)}>
-                    Use Valid Demo PDF
-                  </button>
-                  {selectedIndustry === "insurance" && (
-                    <button className="btn-secondary" style={{ flex: 1, minWidth: "160px", justifyContent: "center", borderColor: "rgba(239, 68, 68, 0.2)" }} onClick={() => handleLoadDemoPdf(true)}>
-                      Use Negative Demo PDF
+                  {activeTab === "existing" ? (
+                    <button 
+                      className="btn-secondary" 
+                      style={{ flex: 1, minWidth: "160px", justifyContent: "center" }} 
+                      onClick={() => handleLoadDemoPdf(selectedIndustry === "insurance")}
+                    >
+                      Use Demo Existing Document
                     </button>
+                  ) : (
+                    <>
+                      <button className="btn-secondary" style={{ flex: 1, minWidth: "160px", justifyContent: "center" }} onClick={() => handleLoadDemoPdf(false)}>
+                        Use Valid Demo PDF
+                      </button>
+                      {selectedIndustry === "insurance" && (
+                        <button className="btn-secondary" style={{ flex: 1, minWidth: "160px", justifyContent: "center", borderColor: "rgba(239, 68, 68, 0.2)" }} onClick={() => handleLoadDemoPdf(true)}>
+                          Use Negative Demo PDF
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
