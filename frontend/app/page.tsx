@@ -590,6 +590,53 @@ export default function Home() {
     }
   };
 
+  const [isDownloadingAll, setIsDownloadingAll] = useState(false);
+
+  const handleDownloadAllProcessedData = async () => {
+    if (history.length === 0) return;
+    
+    setIsDownloadingAll(true);
+    try {
+      const payloadItems = history.map(item => ({
+        file_name: item.file_name,
+        industry: item.industry,
+        document_type: item.document_type,
+        extracted_data: item.extracted_data,
+        validation: item.validation,
+        overall_status: item.overall_status,
+        original_data: item.original_data || item.extracted_data
+      }));
+      
+      const response = await fetch(`${apiUrl}/api/generate-combined-report`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ items: payloadItems })
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to compile combined PDF summary report.");
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      
+      const timestamp = new Date().toISOString().split('T')[0];
+      a.download = `processed_documents_report_${timestamp}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      triggerError(err.message || "Failed to download combined report.");
+    } finally {
+      setIsDownloadingAll(false);
+    }
+  };
+
   const handleUpdateAndRevalidate = () => {
     triggerRevalidateWithInputs(manualInputs);
   };
@@ -1438,20 +1485,36 @@ export default function Home() {
                   {history.length} items
                 </span>
               </div>
-              <button 
-                className="btn-secondary" 
-                style={{ 
-                  padding: "6px 12px", 
-                  fontSize: "12px", 
-                  borderColor: "rgba(220, 38, 38, 0.4)", 
-                  color: "#b91c1c", 
-                  fontWeight: 600,
-                  background: "rgba(220, 38, 38, 0.04)" 
-                }}
-                onClick={handleClearHistory}
-              >
-                <TrashIcon /> Clear Session
-              </button>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button 
+                  className="btn-primary" 
+                  style={{ 
+                    padding: "6px 12px", 
+                    fontSize: "12.5px", 
+                    background: "var(--accent-gradient)",
+                    border: "none",
+                    boxShadow: "0 2px 8px rgba(99, 102, 241, 0.15)"
+                  }}
+                  onClick={handleDownloadAllProcessedData}
+                  disabled={isDownloadingAll}
+                >
+                  {isDownloadingAll ? <Spinner /> : "Download All Processed Data"}
+                </button>
+                <button 
+                  className="btn-secondary" 
+                  style={{ 
+                    padding: "6px 12px", 
+                    fontSize: "12px", 
+                    borderColor: "rgba(220, 38, 38, 0.4)", 
+                    color: "#b91c1c", 
+                    fontWeight: 600,
+                    background: "rgba(220, 38, 38, 0.04)" 
+                  }}
+                  onClick={handleClearHistory}
+                >
+                  <TrashIcon /> Clear Session
+                </button>
+              </div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "16px" }}>

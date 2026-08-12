@@ -1,7 +1,7 @@
 # backend/schemas/processing.py
 
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 class FieldValidation(BaseModel):
     valid: bool = Field(..., description="Whether the field passed all deterministic checks")
@@ -29,3 +29,6 @@ class GeneratePdfRequest(BaseModel):
     validation: Dict[str, FieldValidation] = Field(..., description="Validation results")
     overall_status: str = Field(..., description="Overall status")
     original_data: Dict[str, Any] = Field(..., description="Original extracted key-value pairs")
+
+class CombinedReportRequest(BaseModel):
+    items: List[GeneratePdfRequest] = Field(..., description="List of all successfully processed documents in the session")

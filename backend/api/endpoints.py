@@ -3,11 +3,11 @@
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, status
 from fastapi.responses import StreamingResponse
 import io
-from backend.schemas.processing import DocumentProcessResponse, ErrorResponse, GeneratePdfRequest
+from backend.schemas.processing import DocumentProcessResponse, ErrorResponse, GeneratePdfRequest, CombinedReportRequest
 from backend.config.industries import INDUSTRIES
 from backend.services.pdf_extractor import extract_text_from_pdf
 from backend.services.openai_service import extract_document_info
-from backend.services.pdf_generator import generate_validated_summary_pdf
+from backend.services.pdf_generator import generate_validated_summary_pdf, generate_combined_summary_report_pdf
 from backend.validators.deterministic import validate_extracted_data
 
 router = APIRouter()
@@ -145,4 +145,37 @@ async def generate_pdf(request_data: GeneratePdfRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate updated PDF summary copy: {str(e)}"
+        )
+
+@router.post(
+    "/generate-combined-report",
+    responses={
+        400: {"model": ErrorResponse, "description": "Failed to generate combined report"},
+        500: {"model": ErrorResponse, "description": "Internal server error"}
+    }
+)
+async def generate_combined_report(request_data: CombinedReportRequest):
+    try:
+        if not request_data.items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No items provided to generate combined report."
+            )
+            
+        pdf_bytes = generate_combined_summary_report_pdf(request_data.items)
+        stream = io.BytesIO(pdf_bytes)
+        
+        return StreamingResponse(
+            stream,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "attachment; filename=processed_documents_report.pdf"
+            }
+        )
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate combined processed documents report: {str(e)}"
         )
