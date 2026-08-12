@@ -1148,7 +1148,7 @@ export default function Home() {
                           setEditingFields({});
                         }}
                       >
-                        ✓ Save / Update
+                        Save/Update
                       </button>
                     </div>
 
@@ -1382,7 +1382,7 @@ export default function Home() {
                           style={{ marginTop: "16px", width: "100%", justifyContent: "center", display: "flex", gap: "8px" }}
                           onClick={handleUpdateAndRevalidate}
                         >
-                          ✓ Apply changes & Re-Validate
+                          Save/Update
                         </button>
                       )}
                     </div>
