@@ -1,10 +1,13 @@
 # backend/api/endpoints.py
 
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, status
-from backend.schemas.processing import DocumentProcessResponse, ErrorResponse
+from fastapi.responses import StreamingResponse
+import io
+from backend.schemas.processing import DocumentProcessResponse, ErrorResponse, GeneratePdfRequest
 from backend.config.industries import INDUSTRIES
 from backend.services.pdf_extractor import extract_text_from_pdf
 from backend.services.openai_service import extract_document_info
+from backend.services.pdf_generator import generate_validated_summary_pdf
 from backend.validators.deterministic import validate_extracted_data
 
 router = APIRouter()
@@ -99,3 +102,47 @@ async def process_document(
         validation=validation_results,
         overall_status=overall_status
     )
+
+@router.post(
+    "/generate-pdf",
+    responses={
+        400: {"model": ErrorResponse, "description": "Failed to generate PDF"},
+        500: {"model": ErrorResponse, "description": "Internal server error"}
+    }
+)
+async def generate_pdf(request_data: GeneratePdfRequest):
+    try:
+        validation_dict = {
+            k: {"valid": v.valid, "message": v.message}
+            for k, v in request_data.validation.items()
+        }
+        
+        pdf_bytes = generate_validated_summary_pdf(
+            original_filename=request_data.file_name,
+            industry=request_data.industry,
+            document_type=request_data.document_type,
+            extracted_data=request_data.extracted_data,
+            validation=validation_dict,
+            overall_status=request_data.overall_status,
+            original_data=request_data.original_data
+        )
+        
+        stream = io.BytesIO(pdf_bytes)
+        
+        base_name = request_data.file_name
+        if base_name.lower().endswith(".pdf"):
+            base_name = base_name[:-4]
+        download_name = f"{base_name}-updated.pdf"
+        
+        return StreamingResponse(
+            stream,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={download_name}"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate updated PDF summary copy: {str(e)}"
+        )

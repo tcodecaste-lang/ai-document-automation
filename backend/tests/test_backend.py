@@ -266,3 +266,47 @@ def test_mock_extraction_healthcare():
     assert fields["appointment_type"]["value"] == "General Consultation"
     assert fields["appointment_date"]["value"] == "2026-08-15"
 
+def test_api_generate_pdf_endpoint():
+    payload = {
+        "file_name": "insurance_demo.pdf",
+        "industry": "insurance",
+        "document_type": "insurance_policy_or_claim",
+        "extracted_data": {
+            "customer_name": "John Smith",
+            "policy_number": "POL12345",
+            "policy_type": "Health Insurance",
+            "policy_start_date": "2026-01-01",
+            "policy_end_date": "2026-12-31",
+            "coverage_amount": "$5000",
+            "accident_date": "2026-08-10",
+            "claim_type": "Car Accident"
+        },
+        "validation": {
+            "customer_name": {"valid": True, "message": "Valid"},
+            "policy_number": {"valid": True, "message": "Valid"},
+            "policy_type": {"valid": True, "message": "Valid"},
+            "policy_start_date": {"valid": True, "message": "Valid"},
+            "policy_end_date": {"valid": True, "message": "Valid"},
+            "coverage_amount": {"valid": True, "message": "Valid"},
+            "accident_date": {"valid": True, "message": "Valid"},
+            "claim_type": {"valid": True, "message": "Valid"}
+        },
+        "overall_status": "ready_for_review",
+        "original_data": {
+            "customer_name": "John Smith",
+            "policy_number": "POL12345",
+            "policy_type": "Health Insurance",
+            "policy_start_date": "2026-01-01",
+            "policy_end_date": "2026-12-31",
+            "coverage_amount": "$5000",
+            "accident_date": None,
+            "claim_type": "Car Accident"
+        }
+    }
+    
+    response = client.post("/api/generate-pdf", json=payload)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert "attachment" in response.headers["content-disposition"]
+    assert len(response.content) > 0
+

@@ -34,6 +34,7 @@ interface SessionResult {
   overall_status: "ready_for_review" | "needs_review";
   pdfUrl: string;
   file: File; // Actual file object for complete restore and re-process capability
+  original_data?: Record<string, any>;
 }
 
 
@@ -154,6 +155,8 @@ export default function Home() {
   const [processingStatus, setProcessingStatus] = useState<string>("");
   const [result, setResult] = useState<ProcessResponse | null>(null);
   const [manualInputs, setManualInputs] = useState<Record<string, string>>({});
+  const [activeTab, setActiveTab] = useState<"process" | "existing">("process");
+  const [originalData, setOriginalData] = useState<Record<string, any>>({});
 
   // In-Memory Session Results History
   const [history, setHistory] = useState<SessionResult[]>([]);
@@ -204,6 +207,8 @@ export default function Home() {
     setFile(null);
     setFileUrl(null);
     setResult(null);
+    setOriginalData({});
+    setActiveTab("process");
     setErrorMessage(null);
     setStep(1);
   };
@@ -338,6 +343,7 @@ export default function Home() {
       
       const extractionResult: ProcessResponse = data;
       setResult(extractionResult);
+      setOriginalData(extractionResult.extracted_data);
       
       const initialInputs: Record<string, string> = {};
       Object.entries(extractionResult.extracted_data).forEach(([k, v]) => {
@@ -357,7 +363,8 @@ export default function Home() {
         validation: extractionResult.validation,
         overall_status: extractionResult.overall_status,
         pdfUrl: fileUrl || "",
-        file: file
+        file: file,
+        original_data: extractionResult.extracted_data
       };
 
       setHistory(prev => [newHistoryItem, ...prev]);
@@ -386,6 +393,8 @@ export default function Home() {
       setFileUrl(item.pdfUrl);
     }
     
+    setOriginalData(item.original_data || item.extracted_data);
+
     setResult({
       success: true,
       industry: item.industry,
@@ -535,6 +544,55 @@ export default function Home() {
     }));
   };
 
+  const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownloadUpdatedPdf = async () => {
+    if (!result || !selectedIndustry || result.overall_status !== "ready_for_review") return;
+    
+    setIsDownloading(true);
+    try {
+      const response = await fetch(`${apiUrl}/api/generate-pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          file_name: result.file_name,
+          industry: result.industry,
+          document_type: result.document_type,
+          extracted_data: result.extracted_data,
+          validation: result.validation,
+          overall_status: result.overall_status,
+          original_data: originalData
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to generate updated PDF summary copy.");
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      
+      let baseName = result.file_name;
+      if (baseName.toLowerCase().endsWith(".pdf")) {
+        baseName = baseName.slice(0, -4);
+      }
+      a.download = `${baseName}-updated.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      triggerError(err.message || "Failed to download PDF summary.");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleUpdateAndRevalidate = () => {
     triggerRevalidateWithInputs(manualInputs);
   };
@@ -635,6 +693,48 @@ export default function Home() {
         {step === 2 && selectedIndustry && (
           <div style={{ maxWidth: "600px", margin: "40px auto", width: "100%", display: "flex", flexDirection: "column", gap: "24px" }}>
             <div className="glass-panel" style={{ padding: "32px", display: "flex", flexDirection: "column", gap: "24px" }}>
+              {/* Workflow Mode Tabs Switcher */}
+              <div className="tab-container" style={{ display: "flex", gap: "8px", background: "rgba(15, 23, 42, 0.04)", padding: "4px", borderRadius: "10px", marginBottom: "8px" }}>
+                <button 
+                  className={`tab-btn ${activeTab === "process" ? "active" : ""}`}
+                  style={{ 
+                    flex: 1, 
+                    padding: "10px", 
+                    borderRadius: "8px", 
+                    fontSize: "13.5px", 
+                    fontWeight: 600, 
+                    border: "none", 
+                    cursor: "pointer", 
+                    background: activeTab === "process" ? "#ffffff" : "transparent",
+                    color: activeTab === "process" ? "var(--text-primary)" : "var(--text-secondary)",
+                    boxShadow: activeTab === "process" ? "0 2px 8px rgba(15, 23, 42, 0.08)" : "none",
+                    transition: "all 0.2s ease" 
+                  }}
+                  onClick={() => setActiveTab("process")}
+                >
+                  Process New Document
+                </button>
+                <button 
+                  className={`tab-btn ${activeTab === "existing" ? "active" : ""}`}
+                  style={{ 
+                    flex: 1, 
+                    padding: "10px", 
+                    borderRadius: "8px", 
+                    fontSize: "13.5px", 
+                    fontWeight: 600, 
+                    border: "none", 
+                    cursor: "pointer", 
+                    background: activeTab === "existing" ? "#ffffff" : "transparent",
+                    color: activeTab === "existing" ? "var(--text-primary)" : "var(--text-secondary)",
+                    boxShadow: activeTab === "existing" ? "0 2px 8px rgba(15, 23, 42, 0.08)" : "none",
+                    transition: "all 0.2s ease" 
+                  }}
+                  onClick={() => setActiveTab("existing")}
+                >
+                  Existing Data Validation
+                </button>
+              </div>
+
               <div>
                 <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", color: "var(--accent-color)" }}>
                   {selectedIndustry} Config Activated
@@ -792,223 +892,498 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            /* AFTER PROCESSING: Center 1-Column Layout (Hides PDF Preview, Full-width details matching user layout) */
-            <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
-              
-              {/* Header card indicating success */}
-              <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}` }}>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Processed Successfully</h3>
-                    {result.overall_status === "ready_for_review" ? (
-                      <div className="status-badge ready">
-                        <CheckIcon /> Ready for Review
-                      </div>
-                    ) : (
-                      <div className="status-badge review">
-                        <AlertIcon /> Needs Review
-                      </div>
-                    )}
-                  </div>
-                  <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
-                    Industry: <strong style={{ textTransform: "capitalize" }}>{selectedIndustry}</strong> • File: {file.name}
-                  </p>
-                </div>
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
-                    Re-Process
-                  </button>
-                  <button 
-                    className="btn-primary" 
-                    style={{ padding: "8px 16px", fontSize: "13px" }} 
-                    onClick={() => { setFile(null); setFileUrl(null); setResult(null); setStep(2); }}
-                  >
-                    Process Another Document
-                  </button>
-                </div>
-              </div>
-
-              {/* Extraction & Validation detail container (50/50 split side-by-side) */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
+            activeTab === "existing" ? (
+              /* EXISTING DATA VALIDATION WORKFLOW SCREEN */
+              <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
                 
-                {/* Section 1: Extracted Information */}
-                <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
-                    Extracted Information
-                  </h3>
+                {/* Header card indicating status */}
+                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}` }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                      <h3 style={{ fontSize: "17px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Loaded & Validated</h3>
+                      {result.overall_status === "ready_for_review" ? (
+                        <div className="status-badge ready" style={{ display: "flex", alignItems: "center", gap: "4px", background: "rgba(22, 163, 74, 0.1)", color: "#16a34a", padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: 700 }}>
+                          <CheckIcon /> Complete
+                        </div>
+                      ) : (
+                        <div className="status-badge review" style={{ display: "flex", alignItems: "center", gap: "4px", background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: 700 }}>
+                          <AlertIcon /> Needs Review
+                        </div>
+                      )}
+                    </div>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
+                      Industry: <strong style={{ textTransform: "capitalize" }}>{selectedIndustry}</strong> • File: {file.name}
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
+                      Re-Process
+                    </button>
+                    <button 
+                      className="btn-primary" 
+                      style={{ padding: "8px 16px", fontSize: "13px" }} 
+                      onClick={() => { setFile(null); setFileUrl(null); setResult(null); setStep(2); }}
+                    >
+                      Process Another Document
+                    </button>
+                  </div>
+                </div>
+
+                {/* 50/50 Layout Side-by-Side: PDF Preview left, Validation right */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
                   
-                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                    {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
-                      const val = result.extracted_data[key];
-                      
-                      const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
-                      const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-                      
-                      let displayName = key.replace(/_/g, " ");
-                      if (key === "accident_date") {
-                        displayName = isAccidentPol ? "Accident Date" : "Incident Date";
-                      }
-                      
-                      let isApplicable = result.extracted_fields?.[key]?.applicable !== false;
-                      const isValid = result.validation[key]?.valid !== false;
-                      
-                      // 1. If not applicable, show the field as [Not Applicable]
-                      if (!isApplicable) {
-                        return (
-                          <div key={key} className="data-row" style={{ opacity: 0.5 }}>
-                            <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
-                            <span className="data-value" style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "13px" }}>[Not Applicable]</span>
+                  {/* Left Column: PDF Preview */}
+                  <div className="glass-panel" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <h3 style={{ fontSize: "15px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
+                      Uploaded Document Preview
+                    </h3>
+                    <div className="preview-container" style={{ height: "550px", width: "100%", background: "#f8fafc", borderRadius: "8px" }}>
+                      {fileUrl ? (
+                        <object 
+                          key={fileUrl}
+                          data={fileUrl} 
+                          type="application/pdf"
+                          style={{ width: "100%", height: "100%", borderRadius: "8px", border: "none" }}
+                        >
+                          <div className="preview-placeholder" style={{ padding: "40px", textAlign: "center" }}>
+                            <span style={{ fontSize: "13.5px", color: "var(--text-secondary)" }}>PDF preview not supported by browser. <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", color: "var(--accent-color)" }}>Open PDF in new tab</a></span>
                           </div>
-                        );
-                      }
-                      
-                      return (
-                        <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: "12px" }}>
-                          <div className="data-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
-                            <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
-                            <span className="data-value">
-                              {val === null || val === "" || !isValid ? (
-                                <span style={{ color: "var(--invalid-color)", fontWeight: 600 }}>[Awaiting Input]</span>
-                              ) : (
-                                key === "amount" ? (String(val).startsWith("$") ? String(val) : `$${val}`) : String(val)
-                              )}
-                            </span>
-                          </div>
+                        </object>
+                      ) : (
+                        <div className="preview-placeholder" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "10px" }}>
+                          <Spinner />
+                          <span>Loading preview...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Column: Validation & Completion Forms */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                    
+                    <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                      <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
+                        Existing Data Validation Checklist
+                      </h3>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                        {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
+                          const val = result.extracted_data[key];
                           
-                          {/* Render input form if value is missing/invalid */}
-                          {!isValid && (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px", width: "100%", background: "rgba(239, 68, 68, 0.05)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.15)" }}>
-                              <span style={{ fontSize: "11px", fontWeight: 700, color: "#dc2626", textTransform: "uppercase", display: "flex", alignItems: "center", gap: "4px" }}>
-                                ⚠ Data Missing
-                              </span>
-                              {key.toLowerCase().includes("date") || key === "date_of_birth" ? (
-                                <input 
-                                  type="date" 
-                                  className="form-input" 
-                                  style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                  value={manualInputs[key] || ""} 
-                                  onChange={(e) => {
-                                    const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                    setManualInputs(nextInputs);
-                                    triggerRevalidateWithInputs(nextInputs);
-                                  }}
-                                />
-                              ) : key === "policy_type" ? (
-                                <select 
-                                  className="form-input" 
-                                  style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                  value={manualInputs[key] || ""} 
-                                  onChange={(e) => {
-                                    const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                    setManualInputs(nextInputs);
-                                    triggerRevalidateWithInputs(nextInputs);
-                                  }}
-                                >
-                                  <option value="">-- Select Policy Type --</option>
-                                  <option value="Health Insurance">Health Insurance</option>
-                                  <option value="Life Insurance">Life Insurance</option>
-                                  <option value="Motor/Auto Insurance">Motor/Auto Insurance</option>
-                                  <option value="Home Insurance">Home Insurance</option>
-                                  <option value="Travel Insurance">Travel Insurance</option>
-                                  <option value="Personal Accident Insurance">Personal Accident Insurance</option>
-                                </select>
-                              ) : key === "category" ? (
-                                <select 
-                                  className="form-input" 
-                                  style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                  value={manualInputs[key] || ""} 
-                                  onChange={(e) => {
-                                    const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                    setManualInputs(nextInputs);
-                                    triggerRevalidateWithInputs(nextInputs);
-                                  }}
-                                >
-                                  <option value="">-- Select Category --</option>
-                                  <option value="Travel">Travel</option>
-                                  <option value="Meals">Meals</option>
-                                  <option value="Office Supplies">Office Supplies</option>
-                                  <option value="Software">Software</option>
-                                  <option value="Others">Others</option>
-                                </select>
-                              ) : key === "amount" ? (
-                                <input 
-                                  type="number" 
-                                  placeholder="Enter amount (e.g. 250.00)"
-                                  className="form-input" 
-                                  style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                  value={manualInputs[key] || ""} 
-                                  onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
-                                  onBlur={() => triggerRevalidateWithInputs(manualInputs)}
-                                />
-                              ) : (
-                                <input 
-                                  type="text" 
-                                  placeholder={`Enter ${displayName.replace(/\b\w/g, c => c.toUpperCase())}`}
-                                  className="form-input" 
-                                  style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                  value={manualInputs[key] || ""} 
-                                  onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
-                                  onBlur={() => triggerRevalidateWithInputs(manualInputs)}
-                                />
+                          const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
+                          const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
+                          
+                          let displayName = key.replace(/_/g, " ");
+                          if (key === "accident_date") {
+                            displayName = isAccidentPol ? "Accident Date" : "Incident Date";
+                          }
+                          
+                          const isApplicable = result.extracted_fields?.[key]?.applicable !== false;
+                          const isValid = result.validation[key]?.valid !== false;
+                          
+                          let statusText = "✓ Available / Valid";
+                          let statusColor = "#16a34a"; // Green
+                          let showInput = false;
+
+                          if (!isApplicable) {
+                            statusText = "— Not Applicable";
+                            statusColor = "#64748b"; // Slate Gray
+                          } else if (val === null || val === undefined || String(val).trim() === "") {
+                            statusText = "⚠ Data Missing";
+                            statusColor = "#ea580c"; // Orange
+                            showInput = true;
+                          } else if (!isValid) {
+                            statusText = "⚠ Incorrect / Inconsistent";
+                            statusColor = "#ef4444"; // Red
+                            showInput = true;
+                          }
+
+                          // If explicitly toggled to edit mode
+                          const isEditing = !!editingFields[key];
+                          if (isEditing && isApplicable) {
+                            showInput = true;
+                          }
+
+                          return (
+                            <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(15,23,42,0.05)", paddingBottom: "16px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: "10px" }}>
+                                <div style={{ display: "flex", flexDirection: "column" }}>
+                                  <span style={{ fontSize: "14px", fontWeight: 700, textTransform: "capitalize", color: "var(--text-primary)" }}>
+                                    {displayName}
+                                  </span>
+                                  {val !== null && val !== "" && isApplicable && !showInput && (
+                                    <span style={{ fontSize: "13.5px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                      {key === "amount" ? (String(val).startsWith("$") ? String(val) : `$${val}`) : String(val)}
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <span style={{ fontSize: "12px", fontWeight: 700, color: statusColor, textTransform: "uppercase" }}>
+                                    {statusText}
+                                  </span>
+                                  {isApplicable && !showInput && (
+                                    <button 
+                                      style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "11px", color: "var(--accent-color)", fontWeight: 600, textDecoration: "underline", padding: 0 }}
+                                      onClick={() => setEditingFields({ ...editingFields, [key]: true })}
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {showInput && (
+                                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px", width: "100%", background: "rgba(15, 23, 42, 0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(15, 23, 42, 0.06)" }}>
+                                  <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+                                    {val === null || val === "" ? "Provide Missing Value:" : "Correct Value:"}
+                                  </span>
+                                  {key.toLowerCase().includes("date") || key === "date_of_birth" ? (
+                                    <input 
+                                      type="date" 
+                                      className="form-input" 
+                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                      value={manualInputs[key] || ""} 
+                                      onChange={(e) => {
+                                        const nextInputs = { ...manualInputs, [key]: e.target.value };
+                                        setManualInputs(nextInputs);
+                                        triggerRevalidateWithInputs(nextInputs);
+                                      }}
+                                    />
+                                  ) : key === "policy_type" ? (
+                                    <select 
+                                      className="form-input" 
+                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                      value={manualInputs[key] || ""} 
+                                      onChange={(e) => {
+                                        const nextInputs = { ...manualInputs, [key]: e.target.value };
+                                        setManualInputs(nextInputs);
+                                        triggerRevalidateWithInputs(nextInputs);
+                                      }}
+                                    >
+                                      <option value="">-- Select Policy Type --</option>
+                                      <option value="Health Insurance">Health Insurance</option>
+                                      <option value="Life Insurance">Life Insurance</option>
+                                      <option value="Motor/Auto Insurance">Motor/Auto Insurance</option>
+                                      <option value="Home Insurance">Home Insurance</option>
+                                      <option value="Travel Insurance">Travel Insurance</option>
+                                      <option value="Personal Accident Insurance">Personal Accident Insurance</option>
+                                    </select>
+                                  ) : key === "category" ? (
+                                    <select 
+                                      className="form-input" 
+                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                      value={manualInputs[key] || ""} 
+                                      onChange={(e) => {
+                                        const nextInputs = { ...manualInputs, [key]: e.target.value };
+                                        setManualInputs(nextInputs);
+                                        triggerRevalidateWithInputs(nextInputs);
+                                      }}
+                                    >
+                                      <option value="">-- Select Category --</option>
+                                      <option value="Travel">Travel</option>
+                                      <option value="Meals">Meals</option>
+                                      <option value="Office Supplies">Office Supplies</option>
+                                      <option value="Software">Software</option>
+                                      <option value="Others">Others</option>
+                                    </select>
+                                  ) : key === "amount" ? (
+                                    <input 
+                                      type="number" 
+                                      placeholder="Enter amount (e.g. 250.00)"
+                                      className="form-input" 
+                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                      value={manualInputs[key] || ""} 
+                                      onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
+                                      onBlur={() => triggerRevalidateWithInputs(manualInputs)}
+                                    />
+                                  ) : (
+                                    <input 
+                                      type="text" 
+                                      placeholder={`Enter ${displayName.replace(/\b\w/g, c => c.toUpperCase())}`}
+                                      className="form-input" 
+                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                      value={manualInputs[key] || ""} 
+                                      onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
+                                      onBlur={() => triggerRevalidateWithInputs(manualInputs)}
+                                    />
+                                  )}
+                                </div>
                               )}
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                          );
+                        })}
+                      </div>
 
-                    {Object.entries(manualInputs).some(([k, v]) => {
-                      const currentVal = result.extracted_data[k];
-                      const compVal = v === "" ? null : (k === "amount" ? (isNaN(parseFloat(v)) ? v : parseFloat(v)) : v);
-                      return currentVal !== compVal;
-                    }) && (
+                      {/* Save / Update button */}
                       <button 
                         className="btn-primary" 
                         style={{ marginTop: "16px", width: "100%", justifyContent: "center", display: "flex", gap: "8px" }}
-                        onClick={handleUpdateAndRevalidate}
+                        onClick={() => {
+                          handleUpdateAndRevalidate();
+                          setEditingFields({});
+                        }}
                       >
-                        ✓ Apply changes & Re-Validate
+                        ✓ Save / Update
                       </button>
-                    )}
-                  </div>
-                </div>
+                    </div>
 
-                {/* Section 2: Validation Status */}
-                <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
-                    Field Validation Status
-                  </h3>
-                  
-                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                    {Object.entries(result.validation).map(([fieldName, validate]) => (
-                      <div 
-                        key={fieldName} 
-                        className={`validation-item ${validate.valid ? "valid" : "invalid"}`}
-                      >
-                        <span className="status-icon">
-                          {validate.valid ? <CheckIcon /> : "×"}
-                        </span>
+                    {/* Overall Status block and Download Button */}
+                    <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(15,23,42,0.05)", paddingBottom: "12px" }}>
                         <div style={{ display: "flex", flexDirection: "column" }}>
-                          <span style={{ fontSize: "13px", fontWeight: 600, textTransform: "capitalize" }}>
-                            {fieldName === "accident_date" ? (
-                              (() => {
-                                const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
-                                const isAccPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-                                return isAccPol ? "Accident Date" : "Incident Date";
-                              })()
-                            ) : fieldName.replace(/_/g, " ")}
+                          <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+                            Overall Dataset Status:
                           </span>
-                          <span style={{ fontSize: "12px", color: validate.valid ? "var(--text-secondary)" : "#fca5a5" }}>
-                            {validate.message}
+                          <span style={{ fontSize: "18px", fontWeight: 800, color: result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)", marginTop: "4px" }}>
+                            {result.overall_status === "ready_for_review" ? "✓ Complete" : "⚠ Needs Review"}
                           </span>
                         </div>
                       </div>
-                    ))}
+
+                      <button
+                        className="btn-primary"
+                        style={{ 
+                          width: "100%", 
+                          justifyContent: "center", 
+                          padding: "12px", 
+                          background: result.overall_status === "ready_for_review" ? "var(--accent-gradient)" : "#cbd5e1",
+                          color: result.overall_status === "ready_for_review" ? "#ffffff" : "#94a3b8",
+                          border: "none",
+                          cursor: result.overall_status === "ready_for_review" ? "pointer" : "not-allowed",
+                          opacity: result.overall_status === "ready_for_review" ? 1 : 0.6,
+                          pointerEvents: result.overall_status === "ready_for_review" ? "auto" : "none",
+                          boxShadow: result.overall_status === "ready_for_review" ? "0 4px 12px rgba(99, 102, 241, 0.2)" : "none"
+                        }}
+                        disabled={result.overall_status !== "ready_for_review" || isDownloading}
+                        onClick={handleDownloadUpdatedPdf}
+                      >
+                        {isDownloading ? <Spinner /> : "Download Updated PDF"}
+                      </button>
+                    </div>
+
                   </div>
                 </div>
 
               </div>
-            </div>
+            ) : (
+              /* legacy PROCESS NEW DOCUMENT WORKFLOW SCREEN */
+              <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
+                
+                {/* Header card indicating success */}
+                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}` }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                      <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Processed Successfully</h3>
+                      {result.overall_status === "ready_for_review" ? (
+                        <div className="status-badge ready">
+                          <CheckIcon /> Ready for Review
+                        </div>
+                      ) : (
+                        <div className="status-badge review">
+                          <AlertIcon /> Needs Review
+                        </div>
+                      )}
+                    </div>
+                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
+                      Industry: <strong style={{ textTransform: "capitalize" }}>{selectedIndustry}</strong> • File: {file.name}
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
+                      Re-Process
+                    </button>
+                    <button 
+                      className="btn-primary" 
+                      style={{ padding: "8px 16px", fontSize: "13px" }} 
+                      onClick={() => { setFile(null); setFileUrl(null); setResult(null); setStep(2); }}
+                    >
+                      Process Another Document
+                    </button>
+                  </div>
+                </div>
+
+                {/* Extraction & Validation detail container (50/50 split side-by-side) */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
+                  
+                  {/* Section 1: Extracted Information */}
+                  <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
+                      Extracted Information
+                    </h3>
+                    
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
+                        const val = result.extracted_data[key];
+                        
+                        const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
+                        const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
+                        
+                        let displayName = key.replace(/_/g, " ");
+                        if (key === "accident_date") {
+                          displayName = isAccidentPol ? "Accident Date" : "Incident Date";
+                        }
+                        
+                        let isApplicable = result.extracted_fields?.[key]?.applicable !== false;
+                        const isValid = result.validation[key]?.valid !== false;
+                        
+                        // 1. If not applicable, show the field as [Not Applicable]
+                        if (!isApplicable) {
+                          return (
+                            <div key={key} className="data-row" style={{ opacity: 0.5 }}>
+                              <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
+                              <span className="data-value" style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "13px" }}>[Not Applicable]</span>
+                            </div>
+                          );
+                        }
+                        
+                        return (
+                          <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: "12px" }}>
+                            <div className="data-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
+                              <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
+                              <span className="data-value">
+                                {val === null || val === "" || !isValid ? (
+                                  <span style={{ color: "var(--invalid-color)", fontWeight: 600 }}>[Awaiting Input]</span>
+                                ) : (
+                                  key === "amount" ? (String(val).startsWith("$") ? String(val) : `$${val}`) : String(val)
+                                )}
+                              </span>
+                            </div>
+                            
+                            {/* Render input form if value is missing/invalid */}
+                            {!isValid && (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px", width: "100%", background: "rgba(239, 68, 68, 0.05)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.15)" }}>
+                                <span style={{ fontSize: "11px", fontWeight: 700, color: "#dc2626", textTransform: "uppercase", display: "flex", alignItems: "center", gap: "4px" }}>
+                                  ⚠ Data Missing
+                                </span>
+                                {key.toLowerCase().includes("date") || key === "date_of_birth" ? (
+                                  <input 
+                                    type="date" 
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => {
+                                      const nextInputs = { ...manualInputs, [key]: e.target.value };
+                                      setManualInputs(nextInputs);
+                                      triggerRevalidateWithInputs(nextInputs);
+                                    }}
+                                  />
+                                ) : key === "policy_type" ? (
+                                  <select 
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => {
+                                      const nextInputs = { ...manualInputs, [key]: e.target.value };
+                                      setManualInputs(nextInputs);
+                                      triggerRevalidateWithInputs(nextInputs);
+                                    }}
+                                  >
+                                    <option value="">-- Select Policy Type --</option>
+                                    <option value="Health Insurance">Health Insurance</option>
+                                    <option value="Life Insurance">Life Insurance</option>
+                                    <option value="Motor/Auto Insurance">Motor/Auto Insurance</option>
+                                    <option value="Home Insurance">Home Insurance</option>
+                                    <option value="Travel Insurance">Travel Insurance</option>
+                                    <option value="Personal Accident Insurance">Personal Accident Insurance</option>
+                                  </select>
+                                ) : key === "category" ? (
+                                  <select 
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => {
+                                      const nextInputs = { ...manualInputs, [key]: e.target.value };
+                                      setManualInputs(nextInputs);
+                                      triggerRevalidateWithInputs(nextInputs);
+                                    }}
+                                  >
+                                    <option value="">-- Select Category --</option>
+                                    <option value="Travel">Travel</option>
+                                    <option value="Meals">Meals</option>
+                                    <option value="Office Supplies">Office Supplies</option>
+                                    <option value="Software">Software</option>
+                                    <option value="Others">Others</option>
+                                  </select>
+                                ) : key === "amount" ? (
+                                  <input 
+                                    type="number" 
+                                    placeholder="Enter amount (e.g. 250.00)"
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
+                                    onBlur={() => triggerRevalidateWithInputs(manualInputs)}
+                                  />
+                                ) : (
+                                  <input 
+                                    type="text" 
+                                    placeholder={`Enter ${displayName.replace(/\b\w/g, c => c.toUpperCase())}`}
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
+                                    onBlur={() => triggerRevalidateWithInputs(manualInputs)}
+                                  />
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      
+                      {Object.entries(manualInputs).some(([k, v]) => {
+                        const currentVal = result.extracted_data[k];
+                        const compVal = v === "" ? null : (k === "amount" ? (isNaN(parseFloat(v)) ? v : parseFloat(v)) : v);
+                        return currentVal !== compVal;
+                      }) && (
+                        <button 
+                          className="btn-primary" 
+                          style={{ marginTop: "16px", width: "100%", justifyContent: "center", display: "flex", gap: "8px" }}
+                          onClick={handleUpdateAndRevalidate}
+                        >
+                          ✓ Apply changes & Re-Validate
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Section 2: Validation Status */}
+                  <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
+                      Field Validation Status
+                    </h3>
+                    
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      {Object.entries(result.validation).map(([fieldName, validate]) => (
+                        <div 
+                          key={fieldName} 
+                          className={`validation-item ${validate.valid ? "valid" : "invalid"}`}
+                        >
+                          <span className="status-icon">
+                            {validate.valid ? <CheckIcon /> : "×"}
+                          </span>
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            <span style={{ fontSize: "13px", fontWeight: 600, textTransform: "capitalize" }}>
+                              {fieldName === "accident_date" ? (
+                                (() => {
+                                  const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
+                                  const isAccPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
+                                  return isAccPol ? "Accident Date" : "Incident Date";
+                                })()
+                              ) : fieldName.replace(/_/g, " ")}
+                            </span>
+                            <span style={{ fontSize: "12px", color: validate.valid ? "var(--text-secondary)" : "#fca5a5" }}>
+                              {validate.message}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )
           )
         )}
 

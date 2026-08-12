@@ -20,3 +20,12 @@ class DocumentProcessResponse(BaseModel):
 class ErrorResponse(BaseModel):
     success: bool = Field(False)
     error: str = Field(..., description="A user-friendly, human-readable error description")
+
+class GeneratePdfRequest(BaseModel):
+    file_name: str = Field(..., description="The name of the original file")
+    industry: str = Field(..., description="Target industry")
+    document_type: str = Field(..., description="Document type")
+    extracted_data: Dict[str, Any] = Field(..., description="Merged final key-value pairs")
+    validation: Dict[str, FieldValidation] = Field(..., description="Validation results")
+    overall_status: str = Field(..., description="Overall status")
+    original_data: Dict[str, Any] = Field(..., description="Original extracted key-value pairs")
