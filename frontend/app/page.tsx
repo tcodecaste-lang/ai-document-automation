@@ -966,6 +966,18 @@ export default function Home() {
                         Existing Data Validation Checklist
                       </h3>
 
+                      {result.overall_status === "ready_for_review" ? (
+                        <div style={{ background: "rgba(22, 163, 74, 0.08)", border: "1px solid rgba(22, 163, 74, 0.2)", padding: "12px", borderRadius: "8px", color: "#16a34a", fontSize: "13px", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                          <span>✓</span>
+                          <span>All fields validated! You can now download the updated PDF summary below.</span>
+                        </div>
+                      ) : (
+                        <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", padding: "12px", borderRadius: "8px", color: "#ef4444", fontSize: "13px", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                          <span>⚠</span>
+                          <span>Missing or incorrect fields detected. Please correct them below, click 'Save / Update', and then download the updated PDF.</span>
+                        </div>
+                      )}
+
                       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                         {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
                           const val = result.extracted_data[key];
