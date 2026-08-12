@@ -1201,6 +1201,22 @@ export default function Home() {
                     </p>
                   </div>
                   <div style={{ display: "flex", gap: "10px" }}>
+                    {result.overall_status === "ready_for_review" && (
+                      <button 
+                        className="btn-primary" 
+                        style={{ 
+                          padding: "8px 16px", 
+                          fontSize: "13px", 
+                          background: "var(--accent-gradient)",
+                          border: "none",
+                          boxShadow: "0 4px 12px rgba(99, 102, 241, 0.2)"
+                        }} 
+                        onClick={handleDownloadUpdatedPdf}
+                        disabled={isDownloading}
+                      >
+                        {isDownloading ? <Spinner /> : "Download PDF"}
+                      </button>
+                    )}
                     <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
                       Re-Process
                     </button>
