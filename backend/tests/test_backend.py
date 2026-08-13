@@ -391,12 +391,15 @@ def test_provider_manager_gemini_success():
     from unittest.mock import MagicMock, patch
     
     AIProviderManager.mark_gemini_available()
+    AIProviderManager.mark_groq_available()
     
     mock_gemini = MagicMock(return_value={"status": "success", "provider": "gemini"})
     mock_groq = MagicMock()
+    mock_mistral = MagicMock()
     
     with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
-         patch.object(AIProviderManager._groq_provider, "extract", mock_groq):
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
          
         result = AIProviderManager.extract(
             industry="insurance",
@@ -408,6 +411,7 @@ def test_provider_manager_gemini_success():
         assert result == {"status": "success", "provider": "gemini"}
         mock_gemini.assert_called_once()
         mock_groq.assert_not_called()
+        mock_mistral.assert_not_called()
         assert AIProviderManager.is_gemini_available() is True
 
 def test_provider_manager_gemini_fails_429_fallback_groq():
@@ -415,12 +419,15 @@ def test_provider_manager_gemini_fails_429_fallback_groq():
     from unittest.mock import MagicMock, patch
     
     AIProviderManager.mark_gemini_available()
+    AIProviderManager.mark_groq_available()
     
     mock_gemini = MagicMock(side_effect=RecoverableProviderError("Quota exceeded", cooldown_seconds=10))
     mock_groq = MagicMock(return_value={"status": "success", "provider": "groq"})
+    mock_mistral = MagicMock()
     
     with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
-         patch.object(AIProviderManager._groq_provider, "extract", mock_groq):
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
          
         result = AIProviderManager.extract(
             industry="insurance",
@@ -432,6 +439,7 @@ def test_provider_manager_gemini_fails_429_fallback_groq():
         assert result == {"status": "success", "provider": "groq"}
         mock_gemini.assert_called_once()
         mock_groq.assert_called_once()
+        mock_mistral.assert_not_called()
         assert AIProviderManager.is_gemini_available() is False
 
 def test_provider_manager_gemini_cooldown_directly_to_groq():
@@ -439,12 +447,15 @@ def test_provider_manager_gemini_cooldown_directly_to_groq():
     from unittest.mock import MagicMock, patch
     
     AIProviderManager.mark_gemini_unavailable(cooldown_seconds=100)
+    AIProviderManager.mark_groq_available()
     
     mock_gemini = MagicMock()
     mock_groq = MagicMock(return_value={"status": "success", "provider": "groq"})
+    mock_mistral = MagicMock()
     
     with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
-         patch.object(AIProviderManager._groq_provider, "extract", mock_groq):
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
          
         result = AIProviderManager.extract(
             industry="insurance",
@@ -456,18 +467,22 @@ def test_provider_manager_gemini_cooldown_directly_to_groq():
         assert result == {"status": "success", "provider": "groq"}
         mock_gemini.assert_not_called()
         mock_groq.assert_called_once()
+        mock_mistral.assert_not_called()
 
 def test_provider_manager_cooldown_expires_retry_gemini_success():
     from backend.services.ai_provider import AIProviderManager
     from unittest.mock import MagicMock, patch
     
     AIProviderManager.mark_gemini_unavailable(cooldown_seconds=-5)
+    AIProviderManager.mark_groq_available()
     
     mock_gemini = MagicMock(return_value={"status": "success", "provider": "gemini"})
     mock_groq = MagicMock()
+    mock_mistral = MagicMock()
     
     with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
-         patch.object(AIProviderManager._groq_provider, "extract", mock_groq):
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
          
         result = AIProviderManager.extract(
             industry="insurance",
@@ -479,20 +494,53 @@ def test_provider_manager_cooldown_expires_retry_gemini_success():
         assert result == {"status": "success", "provider": "gemini"}
         mock_gemini.assert_called_once()
         mock_groq.assert_not_called()
+        mock_mistral.assert_not_called()
         assert AIProviderManager.is_gemini_available() is True
 
-def test_provider_manager_both_fail_raises_503():
+def test_provider_manager_gemini_and_groq_fail_fallback_mistral():
+    from backend.services.ai_provider import AIProviderManager, RecoverableProviderError
+    from unittest.mock import MagicMock, patch
+    
+    AIProviderManager.mark_gemini_available()
+    AIProviderManager.mark_groq_available()
+    
+    mock_gemini = MagicMock(side_effect=RecoverableProviderError("Gemini Quota exceeded", cooldown_seconds=10))
+    mock_groq = MagicMock(side_effect=RecoverableProviderError("Groq Quota exceeded", cooldown_seconds=15))
+    mock_mistral = MagicMock(return_value={"status": "success", "provider": "mistral"})
+    
+    with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
+         
+        result = AIProviderManager.extract(
+            industry="insurance",
+            text="hello",
+            response_schema={},
+            system_prompt="",
+            user_prompt=""
+        )
+        assert result == {"status": "success", "provider": "mistral"}
+        mock_gemini.assert_called_once()
+        mock_groq.assert_called_once()
+        mock_mistral.assert_called_once()
+        assert AIProviderManager.is_gemini_available() is False
+        assert AIProviderManager.is_groq_available() is False
+
+def test_provider_manager_all_three_fail_raises_503():
     from backend.services.ai_provider import AIProviderManager, RecoverableProviderError
     from unittest.mock import MagicMock, patch
     from fastapi import HTTPException
     
     AIProviderManager.mark_gemini_available()
+    AIProviderManager.mark_groq_available()
     
-    mock_gemini = MagicMock(side_effect=RecoverableProviderError("Quota exceeded", cooldown_seconds=10))
-    mock_groq = MagicMock(side_effect=Exception("Groq down"))
+    mock_gemini = MagicMock(side_effect=RecoverableProviderError("Gemini Quota exceeded", cooldown_seconds=10))
+    mock_groq = MagicMock(side_effect=RecoverableProviderError("Groq Quota exceeded", cooldown_seconds=10))
+    mock_mistral = MagicMock(side_effect=Exception("Mistral down"))
     
     with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
-         patch.object(AIProviderManager._groq_provider, "extract", mock_groq):
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
          
         import pytest
         with pytest.raises(HTTPException) as excinfo:
@@ -512,12 +560,15 @@ def test_provider_manager_gemini_unauthorized_does_not_fallback():
     from fastapi import HTTPException
     
     AIProviderManager.mark_gemini_available()
+    AIProviderManager.mark_groq_available()
     
     mock_gemini = MagicMock(side_effect=HTTPException(status_code=401, detail="Invalid API key"))
     mock_groq = MagicMock()
+    mock_mistral = MagicMock()
     
     with patch.object(AIProviderManager._gemini_provider, "extract", mock_gemini), \
-         patch.object(AIProviderManager._groq_provider, "extract", mock_groq):
+         patch.object(AIProviderManager._groq_provider, "extract", mock_groq), \
+         patch.object(AIProviderManager._mistral_provider, "extract", mock_mistral):
          
         import pytest
         with pytest.raises(HTTPException) as excinfo:
@@ -530,5 +581,4 @@ def test_provider_manager_gemini_unauthorized_does_not_fallback():
             )
         assert excinfo.value.status_code == 401
         mock_groq.assert_not_called()
-
-
+        mock_mistral.assert_not_called()

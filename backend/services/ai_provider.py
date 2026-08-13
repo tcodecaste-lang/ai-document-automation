@@ -30,6 +30,83 @@ class AIProvider:
     def extract(self, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
         raise NotImplementedError()
 
+    def _parse_reset_headers(self, e: Exception) -> int:
+        if hasattr(e, "response") and e.response is not None:
+            headers = e.response.headers
+            
+            # 1. retry-after
+            retry_after = headers.get("retry-after")
+            if retry_after:
+                try:
+                    return int(retry_after)
+                except ValueError:
+                    pass
+            
+            # 2. x-ratelimit-reset
+            reset_time = headers.get("x-ratelimit-reset")
+            if reset_time:
+                try:
+                    val = float(reset_time)
+                    if val > 1600000000:
+                        diff = val - time.time()
+                        if diff > 0:
+                            return int(diff)
+                except ValueError:
+                    seconds = 0
+                    match_s = re.search(r'([\d.]+)\s*s', reset_time)
+                    match_m = re.search(r'(\d+)\s*m', reset_time)
+                    match_h = re.search(r'(\d+)\s*h', reset_time)
+                    if match_s:
+                        seconds += float(match_s.group(1))
+                    if match_m:
+                        seconds += int(match_m.group(1)) * 60
+                    if match_h:
+                        seconds += int(match_h.group(1)) * 3600
+                    if seconds > 0:
+                        return int(seconds)
+                        
+        return 60  # default rate-limit cooldown seconds
+
+    def _handle_exception(self, e: Exception, provider_name: str):
+        err_msg = str(e)
+        logger.error(f"[AI] {provider_name} request failed: {err_msg}")
+        
+        # Check standard HTTP status codes via openai API error
+        from openai import RateLimitError, APIConnectionError, APITimeoutError, APIStatusError
+        
+        cooldown = 60
+        is_recoverable = False
+        
+        if isinstance(e, RateLimitError):
+            is_recoverable = True
+            cooldown = self._parse_reset_headers(e)
+            logger.warning(f"[AI] {provider_name} quota/rate limit reached")
+        elif isinstance(e, APITimeoutError) or isinstance(e, APIConnectionError):
+            is_recoverable = True
+            logger.warning(f"[AI] {provider_name} connection/timeout error detected")
+        elif isinstance(e, APIStatusError):
+            # Do NOT fall back for 400 (bad request), 401 (unauthorized), 403 (forbidden)
+            if e.status_code in [429, 500, 502, 503, 504]:
+                is_recoverable = True
+                cooldown = self._parse_reset_headers(e)
+                if e.status_code == 429:
+                    logger.warning(f"[AI] {provider_name} quota/rate limit reached")
+            else:
+                # Configuration or request format errors (400, 401, 403) -> propagate directly
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"{provider_name} API request failed with configuration error: {err_msg}"
+                )
+        elif "quota" in err_msg.lower() or "limit" in err_msg.lower() or "exhausted" in err_msg.lower() or "rate" in err_msg.lower() or "resource_exhausted" in err_msg.lower():
+            is_recoverable = True
+            logger.warning(f"[AI] {provider_name} quota/rate limit reached")
+            
+        if is_recoverable:
+            raise RecoverableProviderError(f"{provider_name} encountered a recoverable error: {err_msg}", cooldown_seconds=cooldown)
+        
+        # Propagate programming, format, or credential errors directly
+        raise e
+
 class GeminiProvider(AIProvider):
     def get_client_and_model(self) -> tuple[OpenAI, str]:
         gemini_key = os.environ.get("GEMINI_API_KEY")
@@ -95,85 +172,7 @@ class GeminiProvider(AIProvider):
             return extracted_data
             
         except Exception as e:
-            # Check if this error is recoverable (429, timeout, transient network)
-            self._handle_exception(e)
-
-    def _handle_exception(self, e: Exception):
-        err_msg = str(e)
-        logger.error(f"[AI] Gemini request failed: {err_msg}")
-        
-        # Check standard HTTP status codes via openai API error
-        from openai import RateLimitError, APIConnectionError, APITimeoutError, APIStatusError
-        
-        cooldown = 60
-        is_recoverable = False
-        
-        if isinstance(e, RateLimitError):
-            is_recoverable = True
-            cooldown = self._parse_reset_headers(e)
-            logger.warning("[AI] Gemini quota/rate limit reached")
-        elif isinstance(e, APITimeoutError) or isinstance(e, APIConnectionError):
-            is_recoverable = True
-            logger.warning("[AI] Gemini connection/timeout error detected")
-        elif isinstance(e, APIStatusError):
-            # Do NOT fall back for 400 (bad request), 401 (unauthorized), 403 (forbidden)
-            if e.status_code in [429, 500, 502, 503, 504]:
-                is_recoverable = True
-                cooldown = self._parse_reset_headers(e)
-                if e.status_code == 429:
-                    logger.warning("[AI] Gemini quota/rate limit reached")
-            else:
-                # Configuration or request format errors (400, 401, 403) -> propagate directly
-                raise HTTPException(
-                    status_code=e.status_code,
-                    detail=f"Gemini API request failed with configuration error: {err_msg}"
-                )
-        elif "quota" in err_msg.lower() or "limit" in err_msg.lower() or "exhausted" in err_msg.lower() or "rate" in err_msg.lower() or "resource_exhausted" in err_msg.lower():
-            is_recoverable = True
-            logger.warning("[AI] Gemini quota/rate limit reached")
-            
-        if is_recoverable:
-            raise RecoverableProviderError(f"Gemini encountered a recoverable error: {err_msg}", cooldown_seconds=cooldown)
-        
-        # Propagate programming, format, or credential errors directly
-        raise e
-
-    def _parse_reset_headers(self, e: Exception) -> int:
-        if hasattr(e, "response") and e.response is not None:
-            headers = e.response.headers
-            
-            # 1. retry-after
-            retry_after = headers.get("retry-after")
-            if retry_after:
-                try:
-                    return int(retry_after)
-                except ValueError:
-                    pass
-            
-            # 2. x-ratelimit-reset
-            reset_time = headers.get("x-ratelimit-reset")
-            if reset_time:
-                try:
-                    val = float(reset_time)
-                    if val > 1600000000:
-                        diff = val - time.time()
-                        if diff > 0:
-                            return int(diff)
-                except ValueError:
-                    seconds = 0
-                    match_s = re.search(r'([\d.]+)\s*s', reset_time)
-                    match_m = re.search(r'(\d+)\s*m', reset_time)
-                    match_h = re.search(r'(\d+)\s*h', reset_time)
-                    if match_s:
-                        seconds += float(match_s.group(1))
-                    if match_m:
-                        seconds += int(match_m.group(1)) * 60
-                    if match_h:
-                        seconds += int(match_h.group(1)) * 3600
-                    if seconds > 0:
-                        return int(seconds)
-                        
-        return 60  # default rate-limit cooldown seconds
+            self._handle_exception(e, "Gemini")
 
 class GroqProvider(AIProvider):
     def get_client_and_model(self) -> tuple[OpenAI, str]:
@@ -188,7 +187,6 @@ class GroqProvider(AIProvider):
             api_key=groq_key,
             base_url="https://api.groq.com/openai/v1"
         )
-        # Using Llama 3.3 70B as standard fallback
         return client, "llama-3.3-70b-versatile"
 
     def extract(self, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
@@ -196,8 +194,6 @@ class GroqProvider(AIProvider):
             client, model_name = self.get_client_and_model()
             logger.info("[AI] Groq request started")
             
-            # Groq supports structured output via json_object mode.
-            # We append the schema details directly to the system prompt to guarantee compliance.
             schema_instruction = f"\n\nYou MUST return a JSON object strictly matching this JSON schema structure:\n{json.dumps(response_schema.get('schema', response_schema))}"
             response = client.chat.completions.create(
                 model=model_name,
@@ -214,10 +210,7 @@ class GroqProvider(AIProvider):
             
             raw_content = response.choices[0].message.content
             if not raw_content:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Groq returned an empty response."
-                )
+                raise RecoverableProviderError("Groq returned an empty response.", cooldown_seconds=60)
                 
             extracted_data = json.loads(raw_content)
             if isinstance(extracted_data, dict):
@@ -226,15 +219,65 @@ class GroqProvider(AIProvider):
             return extracted_data
             
         except Exception as e:
-            logger.error(f"[AI] Groq request failed: {str(e)}")
-            raise e
+            self._handle_exception(e, "Groq")
+
+class MistralProvider(AIProvider):
+    def get_client_and_model(self) -> tuple[OpenAI, str]:
+        mistral_key = os.environ.get("MISTRAL_API_KEY")
+        if not mistral_key or mistral_key.strip() == "":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Mistral API key is missing. Please set MISTRAL_API_KEY in backend/.env."
+            )
+            
+        client = OpenAI(
+            api_key=mistral_key,
+            base_url="https://api.mistral.ai/v1"
+        )
+        return client, "mistral-large-latest"
+
+    def extract(self, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
+        try:
+            client, model_name = self.get_client_and_model()
+            logger.info("[AI] Mistral request started")
+            
+            schema_instruction = f"\n\nYou MUST return a JSON object strictly matching this JSON schema structure:\n{json.dumps(response_schema.get('schema', response_schema))}"
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt + schema_instruction},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={
+                    "type": "json_object"
+                },
+                temperature=0.0,
+                timeout=30.0
+            )
+            
+            raw_content = response.choices[0].message.content
+            if not raw_content:
+                raise RecoverableProviderError("Mistral returned an empty response.", cooldown_seconds=60)
+                
+            extracted_data = json.loads(raw_content)
+            if isinstance(extracted_data, dict):
+                extracted_data["ai_provider"] = "Mistral"
+            logger.info("[AI] Mistral request successful")
+            return extracted_data
+            
+        except Exception as e:
+            self._handle_exception(e, "Mistral")
 
 class AIProviderManager:
     _gemini_status = "AVAILABLE"
     _gemini_cooldown_until: Optional[datetime] = None
     
+    _groq_status = "AVAILABLE"
+    _groq_cooldown_until: Optional[datetime] = None
+    
     _gemini_provider = GeminiProvider()
     _groq_provider = GroqProvider()
+    _mistral_provider = MistralProvider()
     
     @classmethod
     def mark_gemini_unavailable(cls, cooldown_seconds: int):
@@ -258,8 +301,29 @@ class AIProviderManager:
         return True
 
     @classmethod
+    def mark_groq_unavailable(cls, cooldown_seconds: int):
+        cls._groq_status = "TEMPORARILY_UNAVAILABLE"
+        cls._groq_cooldown_until = datetime.utcnow() + timedelta(seconds=cooldown_seconds)
+        logger.warning(f"[AI] Groq marked TEMPORARILY_UNAVAILABLE until {cls._groq_cooldown_until.isoformat()} UTC (cooldown: {cooldown_seconds}s)")
+
+    @classmethod
+    def mark_groq_available(cls):
+        cls._groq_status = "AVAILABLE"
+        cls._groq_cooldown_until = None
+        logger.info("[AI] Groq marked AVAILABLE")
+
+    @classmethod
+    def is_groq_available(cls) -> bool:
+        if cls._groq_status == "TEMPORARILY_UNAVAILABLE":
+            if cls._groq_cooldown_until and datetime.utcnow() > cls._groq_cooldown_until:
+                logger.info("[AI] Groq cooldown reset window elapsed. Eligible for retry.")
+                return True
+            return False
+        return True
+
+    @classmethod
     def extract(cls, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
-        # Step 1: Detect Primary availability
+        # Step 1: Detect Gemini availability
         use_gemini = cls.is_gemini_available()
         
         if use_gemini:
@@ -267,7 +331,7 @@ class AIProviderManager:
             try:
                 result = cls._gemini_provider.extract(industry, text, response_schema, system_prompt, user_prompt)
                 
-                # Cooldown switchback: if it was TEMPORARILY_UNAVAILABLE but succeeded now, reset status
+                # Cooldown switchback if Gemini recovered
                 if cls._gemini_status == "TEMPORARILY_UNAVAILABLE":
                     logger.info("[AI] Gemini retry successful")
                     logger.info("[AI] Switching primary provider back to Gemini")
@@ -275,26 +339,42 @@ class AIProviderManager:
                     
                 return result
             except RecoverableProviderError as rpe:
-                logger.warning(f"[AI] Gemini recoverable failure. Cooldown seconds: {rpe.cooldown_seconds}")
+                logger.warning(f"[AI] Gemini recoverable failure: {str(rpe)}. Cooldown seconds: {rpe.cooldown_seconds}")
                 cls.mark_gemini_unavailable(rpe.cooldown_seconds)
                 logger.warning("[AI] Switching to fallback provider: Groq")
-                
-                # Attempt fallback immediately
-                try:
-                    return cls._groq_provider.extract(industry, text, response_schema, system_prompt, user_prompt)
-                except Exception as groq_err:
-                    logger.error(f"[AI] Both Gemini and Groq providers failed.")
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="AI processing is temporarily unavailable. Please try again later."
-                    )
+                # Fall through to try Groq fallback
         else:
-            logger.info("[AI] Gemini is cooling down. Routing request directly to Groq fallback.")
+            logger.info("[AI] Gemini is cooling down. Trying fallback: Groq")
+            
+        # Step 2: Try Groq availability
+        use_groq = cls.is_groq_available()
+        if use_groq:
+            logger.info("[AI] Try provider: Groq")
             try:
-                return cls._groq_provider.extract(industry, text, response_schema, system_prompt, user_prompt)
-            except Exception as groq_err:
-                logger.error(f"[AI] Fallback Groq provider failed during Gemini cooldown.")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="AI processing is temporarily unavailable. Please try again later."
-                )
+                result = cls._groq_provider.extract(industry, text, response_schema, system_prompt, user_prompt)
+                
+                # Cooldown switchback if Groq recovered
+                if cls._groq_status == "TEMPORARILY_UNAVAILABLE":
+                    logger.info("[AI] Groq retry successful")
+                    logger.info("[AI] Resetting Groq fallback status to AVAILABLE")
+                    cls.mark_groq_available()
+                    
+                return result
+            except RecoverableProviderError as rpe:
+                logger.warning(f"[AI] Groq recoverable failure: {str(rpe)}. Cooldown seconds: {rpe.cooldown_seconds}")
+                cls.mark_groq_unavailable(rpe.cooldown_seconds)
+                logger.warning("[AI] Switching to second fallback provider: Mistral")
+                # Fall through to try Mistral fallback
+        else:
+            logger.info("[AI] Groq is cooling down. Trying second fallback: Mistral")
+            
+        # Step 3: Try Mistral fallback
+        logger.info("[AI] Try provider: Mistral")
+        try:
+            return cls._mistral_provider.extract(industry, text, response_schema, system_prompt, user_prompt)
+        except Exception as mistral_err:
+            logger.error(f"[AI] All providers (Gemini, Groq, Mistral) failed.")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="AI processing is temporarily unavailable. Please try again later."
+            )
