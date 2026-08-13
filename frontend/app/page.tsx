@@ -1614,7 +1614,7 @@ export default function Home() {
       </main>
 
       {/* Footer credits */}
-      <footer style={{ borderTop: "1px solid rgba(255, 255, 255, 0.05)", padding: "20px 32px", textAlign: "center", fontSize: "12px", color: "var(--text-muted)", background: "rgba(2, 6, 23, 0.4)" }}>
+      <footer style={{ borderTop: "1px solid var(--panel-border)", padding: "20px 32px", textAlign: "center", fontSize: "12px", color: "var(--text-secondary)", background: "rgba(15, 23, 42, 0.02)", width: "100%", position: "relative", zIndex: 10 }}>
         <p>© 2026 AI Document Automation MVP • Session results are stored in-memory only (cleared upon page exit or reload).</p>
       </footer>
     </div>
