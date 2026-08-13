@@ -258,4 +258,7 @@ def extract_document_info(industry: str, text: str) -> dict:
         print(f"Error Details: {str(e)}")
         print(f"Action: Falling back to local deterministic regex extractor...")
         print(f"-----------------------------------------\n")
-        return mock_extraction_fallback(industry, text)
+        data = mock_extraction_fallback(industry, text)
+        if isinstance(data, dict):
+            data["ai_provider"] = "Offline Engine (Regex)"
+        return data

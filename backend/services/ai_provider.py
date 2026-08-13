@@ -89,6 +89,8 @@ class GeminiProvider(AIProvider):
                 raise RecoverableProviderError("Gemini returned an empty response.", cooldown_seconds=60)
                 
             extracted_data = json.loads(raw_content)
+            if isinstance(extracted_data, dict):
+                extracted_data["ai_provider"] = "Gemini"
             logger.info("[AI] Gemini request successful")
             return extracted_data
             
@@ -194,16 +196,17 @@ class GroqProvider(AIProvider):
             client, model_name = self.get_client_and_model()
             logger.info("[AI] Groq request started")
             
-            # Groq fully supports structured output json_schema
+            # Groq supports structured output via json_object mode.
+            # We append the schema details directly to the system prompt to guarantee compliance.
+            schema_instruction = f"\n\nYou MUST return a JSON object strictly matching this JSON schema structure:\n{json.dumps(response_schema.get('schema', response_schema))}"
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": system_prompt + schema_instruction},
                     {"role": "user", "content": user_prompt}
                 ],
                 response_format={
-                    "type": "json_schema",
-                    "json_schema": response_schema
+                    "type": "json_object"
                 },
                 temperature=0.0,
                 timeout=30.0
@@ -217,6 +220,8 @@ class GroqProvider(AIProvider):
                 )
                 
             extracted_data = json.loads(raw_content)
+            if isinstance(extracted_data, dict):
+                extracted_data["ai_provider"] = "Groq"
             logger.info("[AI] Groq request successful")
             return extracted_data
             
@@ -245,8 +250,12 @@ class AIProviderManager:
 
     @classmethod
     def is_gemini_available(cls) -> bool:
-        # Temporarily disabled Gemini to force Groq fallback testing
-        return False
+        if cls._gemini_status == "TEMPORARILY_UNAVAILABLE":
+            if cls._gemini_cooldown_until and datetime.utcnow() > cls._gemini_cooldown_until:
+                logger.info("[AI] Gemini cooldown reset window elapsed. Eligible for retry.")
+                return True
+            return False
+        return True
 
     @classmethod
     def extract(cls, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
