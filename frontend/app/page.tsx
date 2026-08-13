@@ -1002,12 +1002,23 @@ export default function Home() {
               <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
                 
                 {/* Header card indicating status */}
-                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}` }}>
+                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? (result.ai_provider === "Groq" ? "#7d52e9" : "var(--valid-color)") : "var(--invalid-color)"}` }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                       <h3 style={{ fontSize: "17px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Loaded & Validated</h3>
                       {result.overall_status === "ready_for_review" ? (
-                        <div className="status-badge ready" style={{ display: "flex", alignItems: "center", gap: "4px", background: "rgba(22, 163, 74, 0.1)", color: "#16a34a", padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: 700 }}>
+                        <div className="status-badge ready" style={{ 
+                          display: "flex", 
+                          alignItems: "center", 
+                          gap: "4px", 
+                          background: result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.1)" : "rgba(22, 163, 74, 0.1)", 
+                          color: result.ai_provider === "Groq" ? "#7d52e9" : "#16a34a", 
+                          border: `1px solid ${result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.2)" : "rgba(22, 163, 74, 0.2)"}`,
+                          padding: "4px 8px", 
+                          borderRadius: "4px", 
+                          fontSize: "12px", 
+                          fontWeight: 700 
+                        }}>
                           <CheckIcon /> Complete
                         </div>
                       ) : (
@@ -1309,12 +1320,16 @@ export default function Home() {
               <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
                 
                 {/* Header card indicating success */}
-                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}` }}>
+                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? (result.ai_provider === "Groq" ? "#7d52e9" : "var(--valid-color)") : "var(--invalid-color)"}` }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
                       <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Processed Successfully</h3>
                       {result.overall_status === "ready_for_review" ? (
-                        <div className="status-badge ready">
+                        <div className="status-badge ready" style={{
+                          background: result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.08)" : "var(--valid-glow)",
+                          color: result.ai_provider === "Groq" ? "#7d52e9" : "var(--valid-color)",
+                          border: `1px solid ${result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.2)" : "rgba(5, 150, 105, 0.2)"}`
+                        }}>
                           <CheckIcon /> Ready for Review
                         </div>
                       ) : (
