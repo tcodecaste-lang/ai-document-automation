@@ -100,7 +100,8 @@ async def process_document(
         extracted_data=flat_data,
         extracted_fields=nested_fields,
         validation=validation_results,
-        overall_status=overall_status
+        overall_status=overall_status,
+        ai_provider=extracted_data.get("ai_provider")
     )
 
 @router.post(

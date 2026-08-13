@@ -16,6 +16,7 @@ class DocumentProcessResponse(BaseModel):
     extracted_fields: Optional[Dict[str, Any]] = Field(None, description="Detailed field extraction metadata containing value and applicability rules")
     validation: Dict[str, FieldValidation] = Field(..., description="Field-by-field validation results")
     overall_status: str = Field(..., description="Aggregated validation status: ready_for_review or needs_review")
+    ai_provider: Optional[str] = Field(None, description="The name of the AI engine used to process the document")
 
 class ErrorResponse(BaseModel):
     success: bool = Field(False)
