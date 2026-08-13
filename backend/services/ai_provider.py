@@ -293,8 +293,12 @@ class AIProviderManager:
 
     @classmethod
     def is_gemini_available(cls) -> bool:
-        # Temporarily disabled Gemini to force Mistral testing
-        return False
+        if cls._gemini_status == "TEMPORARILY_UNAVAILABLE":
+            if cls._gemini_cooldown_until and datetime.utcnow() > cls._gemini_cooldown_until:
+                logger.info("[AI] Gemini cooldown reset window elapsed. Eligible for retry.")
+                return True
+            return False
+        return True
 
     @classmethod
     def mark_groq_unavailable(cls, cooldown_seconds: int):
@@ -310,8 +314,12 @@ class AIProviderManager:
 
     @classmethod
     def is_groq_available(cls) -> bool:
-        # Temporarily disabled Groq to force Mistral testing
-        return False
+        if cls._groq_status == "TEMPORARILY_UNAVAILABLE":
+            if cls._groq_cooldown_until and datetime.utcnow() > cls._groq_cooldown_until:
+                logger.info("[AI] Groq cooldown reset window elapsed. Eligible for retry.")
+                return True
+            return False
+        return True
 
     @classmethod
     def extract(cls, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
