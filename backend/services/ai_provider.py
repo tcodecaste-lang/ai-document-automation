@@ -58,7 +58,7 @@ class GeminiProvider(AIProvider):
                 api_key=api_key,
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
             )
-            model_name = "gemini-1.5-flash"
+            model_name = "gemini-3.5-flash"
         else:
             client = OpenAI(api_key=api_key)
             model_name = "gpt-4o-mini"
