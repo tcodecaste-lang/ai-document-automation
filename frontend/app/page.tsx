@@ -1311,7 +1311,7 @@ export default function Home() {
                 {/* Header card indicating success */}
                 <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}` }}>
                   <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
                       <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Processed Successfully</h3>
                       {result.overall_status === "ready_for_review" ? (
                         <div className="status-badge ready">
@@ -1321,6 +1321,28 @@ export default function Home() {
                         <div className="status-badge review">
                           <AlertIcon /> Needs Review
                         </div>
+                      )}
+                      {result.ai_provider && (
+                        <span style={{ 
+                          fontSize: "11px", 
+                          fontWeight: 700, 
+                          textTransform: "uppercase", 
+                          padding: "4px 8px", 
+                          borderRadius: "6px", 
+                          background: result.ai_provider === "Gemini" 
+                            ? "linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.1) 100%)" 
+                            : result.ai_provider === "Groq" 
+                              ? "linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(125, 82, 233, 0.1) 100%)" 
+                              : "linear-gradient(135deg, rgba(100, 116, 139, 0.1) 0%, rgba(71, 85, 105, 0.1) 100%)",
+                          color: result.ai_provider === "Gemini" 
+                            ? "#059669" 
+                            : result.ai_provider === "Groq" 
+                              ? "#7d52e9" 
+                              : "#475569",
+                          border: `1px solid ${result.ai_provider === "Gemini" ? "rgba(16, 185, 129, 0.2)" : result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.2)" : "rgba(100, 116, 139, 0.2)"}`
+                        }}>
+                          {result.ai_provider} Engine
+                        </span>
                       )}
                     </div>
                     <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
