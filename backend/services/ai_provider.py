@@ -250,8 +250,12 @@ class AIProviderManager:
 
     @classmethod
     def is_gemini_available(cls) -> bool:
-        # Temporarily disabled Gemini to force Groq fallback testing
-        return False
+        if cls._gemini_status == "TEMPORARILY_UNAVAILABLE":
+            if cls._gemini_cooldown_until and datetime.utcnow() > cls._gemini_cooldown_until:
+                logger.info("[AI] Gemini cooldown reset window elapsed. Eligible for retry.")
+                return True
+            return False
+        return True
 
     @classmethod
     def extract(cls, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
