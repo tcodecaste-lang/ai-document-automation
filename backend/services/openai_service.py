@@ -5,6 +5,7 @@ import json
 from openai import OpenAI
 from fastapi import HTTPException, status
 from backend.config.industries import INDUSTRIES
+from backend.services.ai_provider import AIProviderManager
 
 import re
 
@@ -241,42 +242,19 @@ def extract_document_info(industry: str, text: str) -> dict:
     user_prompt = f"Document text:\n{text}"
     
     try:
-        # Load client inside try to capture missing key exceptions
-        client = get_openai_client()
-        
-        # Determine model dynamically
-        gemini_key = os.environ.get("GEMINI_API_KEY")
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        is_gemini = bool(gemini_key) or (bool(openai_key) and openai_key.strip().startswith("AIzaSy"))
-        model_name = "gemini-1.5-flash" if is_gemini else "gpt-4o-mini"
-        
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": response_schema
-            },
-            temperature=0.0,
-            timeout=30.0
+        return AIProviderManager.extract(
+            industry=industry,
+            text=text,
+            response_schema=response_schema,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
         )
-        
-        raw_content = response.choices[0].message.content
-        if not raw_content:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="OpenAI returned an empty response."
-            )
-            
-        extracted_data = json.loads(raw_content)
-        return extracted_data
-        
+    except HTTPException as he:
+        # Propagate custom HTTP exceptions directly (e.g. invalid keys or dual outage)
+        raise he
     except Exception as e:
         # Log/Print warning to server console, and run free local fallback extraction
-        print(f"\n--- WARNING: OpenAI/Gemini API Call Failed ---")
+        print(f"\n--- WARNING: AI Provider Call Failed ---")
         print(f"Error Details: {str(e)}")
         print(f"Action: Falling back to local deterministic regex extractor...")
         print(f"-----------------------------------------\n")
