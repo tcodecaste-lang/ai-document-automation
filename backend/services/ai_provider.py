@@ -187,7 +187,7 @@ class GroqProvider(AIProvider):
             base_url="https://api.groq.com/openai/v1"
         )
         # Using Llama 3.3 70B as standard fallback
-        return client, "llama-3.3-70b-specdec"
+        return client, "llama-3.3-70b-versatile"
 
     def extract(self, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
         try:
@@ -245,12 +245,8 @@ class AIProviderManager:
 
     @classmethod
     def is_gemini_available(cls) -> bool:
-        if cls._gemini_status == "TEMPORARILY_UNAVAILABLE":
-            if cls._gemini_cooldown_until and datetime.utcnow() > cls._gemini_cooldown_until:
-                logger.info("[AI] Gemini cooldown reset window elapsed. Eligible for retry.")
-                return True
-            return False
-        return True
+        # Temporarily disabled Gemini to force Groq fallback testing
+        return False
 
     @classmethod
     def extract(cls, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
