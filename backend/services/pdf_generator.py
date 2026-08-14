@@ -177,14 +177,27 @@ def generate_validated_summary_pdf(
         
         status_html = f"<font color='{status_color}'><b>{status}</b></font>"
         
-        # Make field name display nicely
-        if field_name == "accident_date":
-            # Adjust label dynamically based on policy type in the final data
-            current_policy_type = extracted_data.get("policy_type")
-            is_accident_pol = current_policy_type in ["Travel Insurance", "Personal Accident Insurance", "Motor/Auto Insurance", "Health Insurance"]
-            display_name = "Accident Date" if is_accident_pol else "Incident Date"
-        else:
-            display_name = field_name.replace('_', ' ').title()
+        # Make field name display nicely by checking the dynamic database configuration
+        from backend.services.database import get_db
+        display_name = None
+        try:
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT label FROM fields WHERE name = ? LIMIT 1", (field_name,))
+                row = cursor.fetchone()
+                if row:
+                    display_name = row["label"]
+        except Exception:
+            pass
+            
+        if not display_name:
+            if field_name == "accident_date":
+                # Adjust label dynamically based on policy type in the final data
+                current_policy_type = extracted_data.get("policy_type")
+                is_accident_pol = current_policy_type in ["Travel Insurance", "Personal Accident Insurance", "Motor/Auto Insurance", "Health Insurance"]
+                display_name = "Accident Date" if is_accident_pol else "Incident Date"
+            else:
+                display_name = field_name.replace('_', ' ').title()
             
         table_data.append([
             Paragraph(display_name, body_style),
@@ -380,8 +393,16 @@ def generate_combined_summary_report_pdf(items: list) -> bytes:
             # Calculate dynamic status
             val_is_empty = val is None or str(val).strip() == ""
             field_val_obj = validation.get(field_name)
-            field_valid = field_val_obj.valid if field_val_obj else True
-            field_msg = field_val_obj.message if field_val_obj else ""
+            
+            field_valid = True
+            field_msg = ""
+            if field_val_obj:
+                if hasattr(field_val_obj, "valid"):
+                    field_valid = field_val_obj.valid
+                    field_msg = field_val_obj.message
+                elif isinstance(field_val_obj, dict):
+                    field_valid = field_val_obj.get("valid", True)
+                    field_msg = field_val_obj.get("message", "")
             
             is_not_applicable = "not applicable" in field_msg.lower()
             
@@ -410,12 +431,26 @@ def generate_combined_summary_report_pdf(items: list) -> bytes:
             
             status_html = f"<font color='{status_color}'><b>{status}</b></font>"
             
-            if field_name == "accident_date":
-                current_policy_type = extracted_data.get("policy_type")
-                is_accident_pol = current_policy_type in ["Travel Insurance", "Personal Accident Insurance", "Motor/Auto Insurance", "Health Insurance"]
-                display_name = "Accident Date" if is_accident_pol else "Incident Date"
-            else:
-                display_name = field_name.replace('_', ' ').title()
+            # Make field name display nicely by checking the dynamic database configuration
+            from backend.services.database import get_db
+            display_name = None
+            try:
+                with get_db() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT label FROM fields WHERE name = ? LIMIT 1", (field_name,))
+                    row = cursor.fetchone()
+                    if row:
+                        display_name = row["label"]
+            except Exception:
+                pass
+                
+            if not display_name:
+                if field_name == "accident_date":
+                    current_policy_type = extracted_data.get("policy_type")
+                    is_accident_pol = current_policy_type in ["Travel Insurance", "Personal Accident Insurance", "Motor/Auto Insurance", "Health Insurance"]
+                    display_name = "Accident Date" if is_accident_pol else "Incident Date"
+                else:
+                    display_name = field_name.replace('_', ' ').title()
                 
             table_data.append([
                 Paragraph(display_name, body_style),

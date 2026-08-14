@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 base_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(dotenv_path=os.path.join(base_dir, ".env"))
 
+from backend.services.database import init_db
+init_db()
 
 from backend.api.endpoints import router as api_router
 from backend.schemas.processing import ErrorResponse

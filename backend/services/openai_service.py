@@ -2,60 +2,106 @@
 
 import os
 import json
+import logging
 from openai import OpenAI
 from fastapi import HTTPException, status
-from backend.config.industries import INDUSTRIES
 from backend.services.ai_provider import AIProviderManager
 
 import re
 
-def get_openai_client() -> OpenAI:
-    # Use GEMINI_API_KEY if defined, or check if OPENAI_API_KEY starts with Gemini's prefix
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    
-    # Auto-detect Gemini key type from value
-    is_gemini = False
-    api_key = None
-    
-    if gemini_key:
-        api_key = gemini_key
-        is_gemini = True
-    elif openai_key:
-        api_key = openai_key
-        if openai_key.strip().startswith("AIzaSy"):
-            is_gemini = True
-            
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="API key is missing. Please set either OPENAI_API_KEY or GEMINI_API_KEY in backend/.env."
-        )
-        
-    if is_gemini:
-        # Route to Google's official OpenAI compatibility endpoint for Gemini
-        return OpenAI(
-            api_key=api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-        )
-        
-    return OpenAI(api_key=api_key)
+logger = logging.getLogger("openai_service")
+logger.setLevel(logging.INFO)
 
-def build_json_schema(industry: str, fields_config: dict) -> dict:
+def classify_document_type(industry: str, text: str) -> str:
     """
-    Builds a JSON schema compatible with OpenAI's structured outputs.
-    All fields in config are marked required in the schema, but allow nulls 
-    if they cannot be found in the document text.
+    Identifies the specific document type for the selected industry.
+    Queries active configured types from the fields database, asks the AI to classify,
+    and falls back to rule-based keyword mapping if AI calls fail.
     """
+    from backend.services.database import get_db
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT document_type FROM fields WHERE industry = ? AND active = 1", (industry,))
+        configured_types = [row["document_type"] for row in cursor.fetchall()]
+        
+    if not configured_types:
+        if industry == "insurance":
+            return "vehicle_insurance_claim"
+        elif industry == "finance":
+            return "expense_receipt"
+        else:
+            return "patient_registration"
+            
+    types_list = ", ".join(configured_types)
+    system_prompt = (
+        "You are a precise document classifier.\n"
+        f"Analyze the document text and identify which document type it is for the '{industry}' industry.\n"
+        f"Choose from the following configured document types: {types_list}.\n"
+        "You MUST return that exact matching string (e.g. 'vehicle_insurance_claim').\n"
+        "If it is a completely new or different document type, return a short snake_case name for it (e.g. 'medical_bill').\n"
+        "Return ONLY the string of the document type (no markdown, no quotes, no extra text)."
+    )
+    
+    user_prompt = f"Document text:\n{text[:2000]}"
+    
+    try:
+        schema = {
+            "name": "document_classifier",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "document_type": {
+                        "type": "string",
+                        "description": "The classified document type label in snake_case"
+                    }
+                },
+                "required": ["document_type"],
+                "additionalProperties": False
+            }
+        }
+        
+        result = AIProviderManager.extract(
+            industry=industry,
+            text=text[:2000],
+            response_schema=schema,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
+        )
+        doc_type = result.get("document_type", "").strip().lower()
+        if doc_type:
+            return doc_type
+    except Exception as e:
+        logger.warning(f"[AI] Document classification call failed: {str(e)}. Falling back to keyword search.")
+        
+    # Keyword-based fallback classifier
+    text_lower = text.lower()
+    if industry == "insurance":
+        if any(kw in text_lower for kw in ["health", "medical", "patient", "treatment"]):
+            return "health_insurance_claim"
+        return "vehicle_insurance_claim"
+    elif industry == "finance":
+        if any(kw in text_lower for kw in ["hotel", "stay", "guest", "check-in"]):
+            return "hotel_expense"
+        return "expense_receipt"
+    elif industry == "healthcare":
+        if any(kw in text_lower for kw in ["bill", "invoice", "total amount", "charge"]):
+            return "medical_bill"
+        return "patient_registration"
+        
+    return configured_types[0]
+
+def build_json_schema_dynamic(document_type: str, fields: list) -> dict:
+    """Builds a dynamic JSON schema based on database field configurations."""
     properties = {}
     required_keys = []
     
-    for field_name, field_info in fields_config.items():
-        field_type = field_info["type"]
-        description = field_info.get("description", f"Extracted {field_name.replace('_', ' ')}")
+    for field in fields:
+        field_name = field["name"]
+        field_type = field["field_type"]
+        description = f"Extracted value for {field['label']}"
         
-        # Map config types to JSON schema types (allowing null)
-        if field_type == "number":
+        if field_type in ("number", "currency"):
             val_type = ["number", "null"]
         else:
             val_type = ["string", "null"]
@@ -85,7 +131,7 @@ def build_json_schema(industry: str, fields_config: dict) -> dict:
             "properties": {
                 "document_type": {
                     "type": "string",
-                    "description": "Specific type of the document identified (e.g. Life Insurance Policy, Health Insurance Claim, Receipt, Patient Registration Form)"
+                    "description": f"Specific type of the document (should be '{document_type}')"
                 },
                 "extracted_fields": {
                     "type": "object",
@@ -99,72 +145,24 @@ def build_json_schema(industry: str, fields_config: dict) -> dict:
         }
     }
 
-def mock_extraction_fallback(industry: str, text: str) -> dict:
-    """
-    Locally parses document text using regular expressions.
-    Acts as a free fallback if OpenAI API calls fail.
-    Supports same-line values and consecutive-line values from layout shifts.
-    """
-    # Clean and list non-empty lines
+def mock_extraction_fallback_dynamic(industry: str, text: str, document_type: str, fields: list) -> dict:
+    """Dynamic fallback parser that matches active DB fields using regex lookups."""
     lines = [line.strip() for line in text.split('\n') if line.strip()]
-    
-    # Custom regex aliases for each field to ensure match resilience
-    field_lookups = {
-        "customer_name": ["customer name", "customer", "claimant", "applicant name", "applicant", "insured name", "insured", "policyholder name", "policyholder"],
-        "policy_number": ["policy number", "policy code", "policy no", "policy #"],
-        "policy_type": ["policy type", "type of policy", "coverage type", "plan type"],
-        "policy_start_date": ["policy start date", "start date", "effective date", "commencement date"],
-        "policy_end_date": ["policy end date", "end date", "expiration date", "expiry date"],
-        "coverage_amount": ["coverage amount", "coverage", "sum insured", "insured amount", "limit", "limit of liability"],
-        "accident_date": ["accident date", "incident date", "date of accident", "date of occurrence"],
-        "claim_type": ["claim type", "incident type", "type of claim"],
-        
-        "employee_name": ["employee name", "staff name", "submitted by", "employee"],
-        "merchant_name": ["merchant name", "merchant", "vendor name", "vendor", "store name", "store"],
-        "amount": ["amount", "total", "cost", "price", "sum", "expense amount", "total amount"],
-        "date": ["date", "receipt date", "expense date", "transaction date", "date of expense", "purchased date"],
-        "category": ["category", "expense type", "category type", "expense category", "class"],
-        
-        "patient_name": ["patient name", "member name", "patient"],
-        "date_of_birth": ["date of birth", "dob", "birthdate", "birth date", "d.o.b.", "patient dob"],
-        "hospital_name": ["hospital name", "hospital", "healthcare provider name", "provider name", "clinic name", "clinic"],
-        "appointment_type": ["appointment type", "consultation type", "visit type", "reason for visit"],
-        "appointment_date": ["appointment date", "visit date", "scheduled date", "date of appointment", "date of visit"]
-    }
-    
-    # Identify document type
-    text_lower = text.lower()
-    doc_type_detected = "Unknown"
-    is_claim = False
-    
-    if industry == "insurance":
-        is_claim = any(kw in text_lower for kw in ["claim", "accident", "incident", "damage", "collision", "theft", "loss"])
-        has_accident_policy_type = any(kw in text_lower for kw in ["travel insurance", "personal accident insurance", "motor/auto insurance", "health insurance", "travel", "personal accident", "motor", "auto", "health"])
-        is_accident_related = is_claim or has_accident_policy_type
-        doc_type_detected = "Insurance Claim Form" if is_claim else "Insurance Policy Schedule"
-    elif industry == "finance":
-        doc_type_detected = "Expense Receipt" if "receipt" in text_lower or "invoice" in text_lower else "Expense Claim"
-    elif industry == "healthcare":
-        doc_type_detected = "Patient Registration Form"
-        
     extracted_fields = {}
-    fields = INDUSTRIES[industry]["fields"]
     
-    for field_name, field_info in fields.items():
-        applicable = True
+    for field in fields:
+        field_name = field["name"]
+        field_label = field["label"]
+        field_type = field["field_type"]
         
-        # For insurance, accident_date is always applicable (representing accident/incident date)
-            
-        if not applicable:
-            extracted_fields[field_name] = {
-                "value": None,
-                "applicable": False
-            }
-            continue
-            
+        aliases = [
+            field_name.lower(),
+            field_name.replace('_', ' ').lower(),
+            field_label.lower(),
+            field_label.replace('/', ' ').replace('-', ' ').lower()
+        ]
+        
         val = None
-        aliases = field_lookups.get(field_name, [field_name.replace('_', ' ')])
-        
         for i, line in enumerate(lines):
             matched_alias = None
             for alias in aliases:
@@ -174,12 +172,10 @@ def mock_extraction_fallback(industry: str, text: str) -> dict:
                     break
                     
             if matched_alias:
-                # Value is on the next line
                 if i + 1 < len(lines):
                     val = lines[i + 1]
                 break
                 
-            # Otherwise check if it is on the same line after a colon
             for alias in aliases:
                 pattern = rf"\b{re.escape(alias)}\s*:\s*(.+)$"
                 match = re.search(pattern, line, re.IGNORECASE)
@@ -189,9 +185,8 @@ def mock_extraction_fallback(industry: str, text: str) -> dict:
             if val:
                 break
                 
-        # Handle decimal formats for amount field
         if val is not None:
-            if field_info["type"] == "number":
+            if field_type in ("number", "currency"):
                 clean_num = val.replace("$", "").replace(",", "").strip()
                 try:
                     val = float(clean_num)
@@ -206,37 +201,42 @@ def mock_extraction_fallback(industry: str, text: str) -> dict:
         }
         
     return {
-        "document_type": doc_type_detected,
+        "document_type": document_type,
         "extracted_fields": extracted_fields
     }
 
-def extract_document_info(industry: str, text: str) -> dict:
-    """
-    Calls OpenAI Chat Completions API with schema enforcement to extract structured data.
-    Falls back to local regex extraction if credentials/quota issues occur.
-    """
-    if industry not in INDUSTRIES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid industry: {industry}"
+def mock_extraction_fallback(industry: str, text: str) -> dict:
+    """Backward-compatible fallback extraction wrapper used by tests."""
+    from backend.services.database import get_db
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name, label, industry, document_type, field_type, required, active, display_order, validation_rules "
+            "FROM fields WHERE industry = ? AND active = 1 "
+            "ORDER BY display_order ASC",
+            (industry,)
         )
+        fields = [dict(row) for row in cursor.fetchall()]
+    doc_type = classify_document_type(industry, text)
+    return mock_extraction_fallback_dynamic(industry, text, doc_type, fields)
+
+def extract_document_info_dynamic(industry: str, text: str, document_type: str, fields: list) -> dict:
+    """Invokes the AI provider manager with the dynamic field schema."""
+    if not fields:
+        return {
+            "document_type": document_type,
+            "extracted_fields": {}
+        }
         
-    config = INDUSTRIES[industry]
-    fields_config = config["fields"]
+    response_schema = build_json_schema_dynamic(document_type, fields)
     
-    # Build schema
-    response_schema = build_json_schema(industry, fields_config)
-    
-    # Build system and user prompt
-    fields_list = ", ".join(fields_config.keys())
+    fields_list = ", ".join(f["name"] for f in fields)
     system_prompt = (
         "You are a precise document scanner and information extractor.\n"
-        f"Analyze the document text for the '{industry}' industry.\n"
-        "1. Identify the specific type of the document (e.g., 'Life Insurance Policy', 'Health Insurance Policy', 'Expense Receipt', 'Patient Registration Form').\n"
-        f"2. For each expected field in the schema ({fields_list}), check if that field is applicable or relevant to this specific type of document layout.\n"
-        "   - E.g., for the 'insurance' industry: 'accident_date' is always applicable (representing either the Accident Date or the Incident/Loss Date depending on the layout).\n"
-        "3. Extract the value if present. If applicable but the information is missing from the document, set value=null and applicable=true.\n"
-        "4. Do not invent, guess, or fabricate any details. Keep values null if not explicitly in the text."
+        f"Analyze the document text for the '{industry}' industry, classified as document type '{document_type}'.\n"
+        f"1. For each expected field in the schema ({fields_list}), check if that field is applicable or relevant to this specific type of document layout.\n"
+        "2. Extract the value if present. If applicable but the information is missing from the document, set value=null and applicable=true.\n"
+        "3. Do not invent, guess, or fabricate any details. Keep values null if not explicitly in the text."
     )
     
     user_prompt = f"Document text:\n{text}"
@@ -250,15 +250,46 @@ def extract_document_info(industry: str, text: str) -> dict:
             user_prompt=user_prompt
         )
     except HTTPException as he:
-        # Propagate custom HTTP exceptions directly (e.g. invalid keys or dual outage)
         raise he
     except Exception as e:
-        # Log/Print warning to server console, and run free local fallback extraction
-        print(f"\n--- WARNING: AI Provider Call Failed ---")
-        print(f"Error Details: {str(e)}")
-        print(f"Action: Falling back to local deterministic regex extractor...")
-        print(f"-----------------------------------------\n")
-        data = mock_extraction_fallback(industry, text)
+        logger.warning(f"[AI] AI extraction call failed: {str(e)}. Falling back to regex engine.")
+        data = mock_extraction_fallback_dynamic(industry, text, document_type, fields)
         if isinstance(data, dict):
             data["ai_provider"] = "Offline Engine (Regex)"
         return data
+
+def extract_document_info(industry: str, text: str) -> dict:
+    """
+    Main entry point for document extraction.
+    Dynamically classifies document type, loads applicable database fields,
+    builds the extraction schema, and queries the AI fallback pipeline.
+    """
+    doc_type = classify_document_type(industry, text)
+    
+    from backend.services.database import get_db
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name, label, industry, document_type, field_type, required, active, display_order, validation_rules "
+            "FROM fields WHERE industry = ? AND document_type = ? AND active = 1 "
+            "ORDER BY display_order ASC",
+            (industry, doc_type)
+        )
+        fields = [dict(row) for row in cursor.fetchall()]
+        
+    if not fields:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, label, industry, document_type, field_type, required, active, display_order, validation_rules "
+                "FROM fields WHERE industry = ? AND active = 1 "
+                "ORDER BY display_order ASC",
+                (industry,)
+            )
+            fields = [dict(row) for row in cursor.fetchall()]
+            
+    data = extract_document_info_dynamic(industry, text, doc_type, fields)
+    
+    if isinstance(data, dict):
+        data["document_type"] = doc_type
+    return data

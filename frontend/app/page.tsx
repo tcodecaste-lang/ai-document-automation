@@ -14,11 +14,12 @@ interface FieldValidation {
 
 interface ProcessResponse {
   success: boolean;
+  id: string;
   industry: string;
   document_type: string;
   file_name: string;
   extracted_data: Record<string, any>;
-  extracted_fields?: Record<string, any>; // Dynamic field metadata containing value + applicable flags
+  extracted_fields?: Record<string, any>;
   validation: Record<string, FieldValidation>;
   overall_status: "ready_for_review" | "needs_review";
   ai_provider?: string;
@@ -35,20 +36,25 @@ interface SessionResult {
   validation: Record<string, FieldValidation>;
   overall_status: "ready_for_review" | "needs_review";
   pdfUrl: string;
-  file: File; // Actual file object for complete restore and re-process capability
+  file?: File;
   original_data?: Record<string, any>;
   ai_provider?: string;
 }
 
+interface DynamicField {
+  id: number;
+  name: string;
+  label: string;
+  industry: string;
+  document_type: string;
+  field_type: string;
+  required: number;
+  active: number;
+  display_order: number;
+  validation_rules: string;
+}
 
 type Industry = "insurance" | "finance" | "healthcare";
-
-const INDUSTRY_FIELDS: Record<Industry, string[]> = {
-  insurance: ["customer_name", "policy_number", "policy_type", "policy_start_date", "policy_end_date", "coverage_amount", "accident_date", "claim_type"],
-  finance: ["employee_name", "merchant_name", "amount", "date", "category"],
-  healthcare: ["patient_name", "date_of_birth", "hospital_name", "appointment_type", "appointment_date"],
-};
-
 
 // ==========================================
 // SVG INLINE ICONS
@@ -88,11 +94,9 @@ const ArrowLeftIcon = () => (
 );
 
 const TrashIcon = () => (
-  <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="3 6 5 6 21 6"></polyline>
     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-    <line x1="10" y1="11" x2="10" y2="17"></line>
-    <line x1="14" y1="11" x2="14" y2="17"></line>
   </svg>
 );
 
@@ -116,7 +120,6 @@ const FilePdfIcon = () => (
     <polyline points="14 2 14 8 20 8"></polyline>
     <line x1="16" y1="13" x2="8" y2="13"></line>
     <line x1="16" y1="17" x2="8" y2="17"></line>
-    <polyline points="10 9 9 9 8 9"></polyline>
   </svg>
 );
 
@@ -127,7 +130,6 @@ const Spinner = () => (
 );
 
 export default function Home() {
-  // Dynamic host-based API URL resolution to prevent CORS and mixed-content issues
   const [apiUrl] = useState(() => {
     if (typeof window !== "undefined") {
       const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
@@ -142,9 +144,28 @@ export default function Home() {
     return "http://localhost:8000";
   });
 
-  // App States
+  // Authentication State
+  const [user, setUser] = useState<{ name: string; email: string; role: string; token: string } | null>(null);
+  const [authView, setAuthView] = useState<"login" | "register">("login");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [authSuccessMessage, setAuthSuccessMessage] = useState<string | null>(null);
+
+  // App Navigation States
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedIndustry, setSelectedIndustry] = useState<Industry | null>(null);
+
+  // Dynamic Fields Config
+  const [dynamicFields, setDynamicFields] = useState<DynamicField[]>([]);
+  const [editingFieldId, setEditingFieldId] = useState<number | null>(null);
+
+  // Inline Field Creation States
+  const [showAddFieldForm, setShowAddFieldForm] = useState(false);
+  const [newFieldLabel, setNewFieldLabel] = useState("");
+  const [newFieldType, setNewFieldType] = useState("text");
+  const [newFieldRequired, setNewFieldRequired] = useState(false);
   
   // File States
   const [file, setFile] = useState<File | null>(null);
@@ -160,8 +181,13 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"process" | "existing">("process");
   const [originalData, setOriginalData] = useState<Record<string, any>>({});
 
-  // In-Memory Session Results History
+  // Session Results History
   const [history, setHistory] = useState<SessionResult[]>([]);
+  
+  // Email Modal States
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState("");
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -174,6 +200,23 @@ export default function Home() {
       }
     };
   }, [fileUrl]);
+
+  // Load session & dynamic fields on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedUser = localStorage.getItem("docauto_user");
+      if (savedUser) {
+        try {
+          const parsed = JSON.parse(savedUser);
+          setUser(parsed);
+          fetchFields(parsed.token);
+          fetchDocuments(parsed.token);
+        } catch (e) {
+          localStorage.removeItem("docauto_user");
+        }
+      }
+    }
+  }, []);
 
   // Sync chosen industry CSS variables to document body for sleek theme transitions
   useEffect(() => {
@@ -188,6 +231,125 @@ export default function Home() {
     setErrorMessage(msg);
     setShakeError(true);
     setTimeout(() => setShakeError(false), 500);
+  };
+
+  // API Call: Retrieve Dynamic Fields
+  const fetchFields = async (token: string) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/fields`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setDynamicFields(data);
+      }
+    } catch (e) {
+      console.error("Failed to load fields from API", e);
+    }
+  };
+
+  // API Call: Retrieve Processed Documents History
+  const fetchDocuments = async (token: string) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/documents`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const formatted = data.map((d: any) => ({
+          id: d.id,
+          timestamp: new Date(d.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          industry: d.industry,
+          document_type: d.document_type,
+          file_name: d.file_name,
+          extracted_data: d.extracted_data,
+          extracted_fields: d.extracted_fields,
+          validation: d.validation,
+          overall_status: d.overall_status,
+          pdfUrl: "",
+          original_data: d.original_data,
+          ai_provider: d.ai_provider
+        }));
+        setHistory(formatted);
+      }
+    } catch (e) {
+      console.error("Failed to load document history", e);
+    }
+  };
+
+  // Auth Operations
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setAuthSuccessMessage(null);
+    if (authPassword !== authConfirmPassword) {
+      triggerError("Passwords do not match.");
+      return;
+    }
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: authName,
+          email: authEmail,
+          password: authPassword,
+          confirm_password: authConfirmPassword
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Registration failed.");
+      
+      setAuthSuccessMessage("Registration successful! Please login.");
+      setAuthView("login");
+      setAuthName("");
+      setAuthPassword("");
+      setAuthConfirmPassword("");
+    } catch (err: any) {
+      triggerError(err.message);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setAuthSuccessMessage(null);
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Login failed.");
+      
+      const sessionData = {
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        token: data.token
+      };
+      localStorage.setItem("docauto_user", JSON.stringify(sessionData));
+      setUser(sessionData);
+      setAuthPassword("");
+      fetchFields(data.token);
+      fetchDocuments(data.token);
+    } catch (err: any) {
+      triggerError(err.message);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("docauto_user");
+    setUser(null);
+    setStep(1);
+    setFile(null);
+    setFileUrl(null);
+    setResult(null);
+    setHistory([]);
+    setSelectedIndustry(null);
+    setErrorMessage(null);
+    setAuthSuccessMessage(null);
   };
 
   const handleSelectIndustry = (industry: Industry) => {
@@ -205,7 +367,6 @@ export default function Home() {
   };
 
   const handleBack = () => {
-    // Reset file and results states when changing industry context
     setFile(null);
     setFileUrl(null);
     setResult(null);
@@ -215,27 +376,23 @@ export default function Home() {
     setStep(1);
   };
 
-  // Helper function to read metadata and load files into preview URL
   const loadFileObject = (selectedFile: File) => {
     if (selectedFile.type !== "application/pdf" && !selectedFile.name.toLowerCase().endsWith(".pdf")) {
       triggerError("Only PDF files are supported.");
       return;
     }
-
     if (selectedFile.size > 10 * 1024 * 1024) {
       triggerError("PDF file must be 10 MB or smaller.");
       return;
     }
-
     const objectUrl = URL.createObjectURL(selectedFile);
     setFile(selectedFile);
     setFileUrl(objectUrl);
-    setResult(null); // Clear previous output
+    setResult(null);
     setErrorMessage(null);
-    setStep(3); // Shift user to preview/process split screen
+    setStep(3);
   };
 
-  // File dropzone events
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -263,29 +420,23 @@ export default function Home() {
     fileInputRef.current?.click();
   };
 
-  // Load preset demonstration files from frontend public/demo-pdfs
   const handleLoadDemoPdf = async (isNegative: boolean = false) => {
     if (!selectedIndustry) return;
-    
     let demoFileName = `${selectedIndustry}_demo.pdf`;
     if (selectedIndustry === "insurance" && isNegative) {
       demoFileName = "insurance_negative_demo.pdf";
     }
-
     setErrorMessage(null);
     setIsProcessing(true);
     setProcessingStatus("Fetching demo PDF file...");
-
     try {
       const demoUrl = `/demo-pdfs/${demoFileName}`;
       const response = await fetch(demoUrl);
       if (!response.ok) {
-        throw new Error(`Demo file not found. Ensure it was successfully generated.`);
+        throw new Error("Demo file not found. Ensure it was successfully generated.");
       }
-
       const blob = await response.blob();
       const demoFile = new File([blob], demoFileName, { type: "application/pdf" });
-      
       loadFileObject(demoFile);
     } catch (err: any) {
       triggerError(err.message || "Failed to load the demo PDF.");
@@ -295,22 +446,19 @@ export default function Home() {
     }
   };
 
-  // POST document processing request to FastAPI
   const handleProcessDocument = async () => {
-    if (!file || !selectedIndustry) {
-      triggerError("Missing document file or industry context.");
+    if (!file || !selectedIndustry || !user) {
+      triggerError("Missing document file or authenticated context.");
       return;
     }
-
     setIsProcessing(true);
     setResult(null);
     setErrorMessage(null);
     setManualInputs({});
 
-    // Dynamic micro loading labels
     const steps = [
       "Extracting plain text from PDF pages...",
-      "Submitting text & JSON schema to OpenAI...",
+      "Submitting text & dynamic database schema to AI...",
       "Running deterministic validations...",
       "Aggregating final results status..."
     ];
@@ -331,15 +479,13 @@ export default function Home() {
     try {
       const response = await fetch(`${apiUrl}/api/process-document`, {
         method: "POST",
+        headers: { Authorization: `Bearer ${user.token}` },
         body: formData
       });
-
       const data = await response.json();
-
       if (!response.ok || !data.success) {
         throw new Error(data.error || `Server returned error status ${response.status}`);
       }
-
       clearInterval(statusInterval);
       setProcessingStatus("Complete!");
       
@@ -353,25 +499,8 @@ export default function Home() {
       });
       setManualInputs(initialInputs);
 
-      // Save valid output to temporary in-memory session history
-      const newHistoryItem: SessionResult = {
-        id: Math.random().toString(36).substring(2, 9),
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        industry: extractionResult.industry,
-        document_type: extractionResult.document_type,
-        file_name: extractionResult.file_name,
-        extracted_data: extractionResult.extracted_data,
-        extracted_fields: extractionResult.extracted_fields,
-        validation: extractionResult.validation,
-        overall_status: extractionResult.overall_status,
-        pdfUrl: fileUrl || "",
-        file: file,
-        original_data: extractionResult.extracted_data,
-        ai_provider: extractionResult.ai_provider
-      };
-
-      setHistory(prev => [newHistoryItem, ...prev]);
-
+      // Refresh list
+      fetchDocuments(user.token);
     } catch (err: any) {
       clearInterval(statusInterval);
       triggerError(err.message || "An unexpected error occurred during processing.");
@@ -381,25 +510,14 @@ export default function Home() {
     }
   };
 
-  // Inspect previous session items
   const handleSelectHistoryItem = (item: SessionResult) => {
     setSelectedIndustry(item.industry as Industry);
-    
-    if (item.file && item.file.size > 0) {
-      // Create a fresh working Blob URL from the stored file object
-      const newUrl = URL.createObjectURL(item.file);
-      setFile(item.file);
-      setFileUrl(newUrl);
-    } else {
-      // Fallback check to support hot-reloaded/legacy session items without crashing
-      setFile(new File([], item.file_name, { type: "application/pdf" }));
-      setFileUrl(item.pdfUrl);
-    }
-    
+    setFile(new File([], item.file_name, { type: "application/pdf" }));
+    setFileUrl("");
     setOriginalData(item.original_data || item.extracted_data);
-
     setResult({
       success: true,
+      id: item.id,
       industry: item.industry,
       document_type: item.document_type,
       file_name: item.file_name,
@@ -418,145 +536,44 @@ export default function Home() {
     setStep(3);
   };
 
-  const triggerRevalidateWithInputs = (currentInputs: Record<string, string>) => {
-    if (!result) return;
-    
-    const updatedData = { ...result.extracted_data };
-    const updatedValidation = { ...result.validation };
-    const updatedExtractedFields = { ...result.extracted_fields };
-    
-    // Copy user inputs to updated data
-    Object.entries(currentInputs).forEach(([key, val]) => {
-      updatedData[key] = val === "" ? null : val;
-    });
-    
-    let allValid = true;
-    
-    // Re-run validation rules on all fields
-    Object.keys(updatedValidation).forEach((fieldName) => {
-      const val = updatedData[fieldName];
-      
-      const currentPolicyType = updatedData["policy_type"];
-      const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-      
-      let fieldLabel = fieldName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      if (fieldName === "accident_date" && !isAccidentPol) {
-        fieldLabel = "Incident Date";
+  const handleSaveUpdateDocument = async () => {
+    if (!result || !user) return;
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`${apiUrl}/api/documents/update`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
+        },
+        body: JSON.stringify({
+          id: result.id,
+          extracted_data: manualInputs
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to update document.");
       }
-
-      const isApplicable = result.extracted_fields?.[fieldName]?.applicable !== false;
-      
-      if (!isApplicable) {
-        updatedValidation[fieldName] = {
-          valid: true,
-          message: `${fieldLabel} is not applicable to this document layout.`
-        };
-        return;
-      }
-      
-      if (val === null || val === undefined || String(val).trim() === "") {
-        updatedValidation[fieldName] = {
-          valid: false,
-          message: `${fieldLabel} is empty.`
-        };
-        allValid = false;
-        return;
-      }
-      
-      const fieldNameLower = fieldName.toLowerCase();
-      
-      // Date validations
-      if (fieldNameLower.includes("date") || fieldNameLower === "date_of_birth") {
-        const dateStr = String(val).trim();
-        // Regex check for ISO YYYY-MM-DD
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (!dateRegex.test(dateStr)) {
-          updatedValidation[fieldName] = {
-            valid: false,
-            message: `${fieldLabel} has an invalid date format: '${val}' (expected YYYY-MM-DD).`
-          };
-          allValid = false;
-        } else {
-          // Check if valid calendar date
-          const d = new Date(dateStr);
-          if (isNaN(d.getTime())) {
-            updatedValidation[fieldName] = {
-              valid: false,
-              message: `${fieldLabel} has an invalid calendar date: '${val}'.`
-            };
-            allValid = false;
-          } else {
-            updatedValidation[fieldName] = {
-              valid: true,
-              message: `${fieldLabel} is valid (${val}).`
-            };
-          }
-        }
-      } 
-      // Numeric amount validation
-      else if (fieldNameLower === "amount") {
-        const clean = String(val).replace("$", "").replace(",", "").trim();
-        const num = parseFloat(clean);
-        if (isNaN(num)) {
-          updatedValidation[fieldName] = {
-            valid: false,
-            message: `${fieldLabel} must be a valid number: '${val}'.`
-          };
-          allValid = false;
-        } else {
-          updatedValidation[fieldName] = {
-            valid: true,
-            message: `${fieldLabel} is valid (${num}).`
-          };
-        }
-      } 
-      // Default string validation
-      else {
-        updatedValidation[fieldName] = {
-          valid: true,
-          message: `${fieldLabel} found.`
-        };
-      }
-    });
-    
-    const nextStatus = allValid ? "ready_for_review" : "needs_review";
-    
-    // Update active result state
-    setResult({
-      ...result,
-      extracted_data: updatedData,
-      extracted_fields: updatedExtractedFields,
-      validation: updatedValidation,
-      overall_status: nextStatus
-    });
-    
-    // Also sync back to history item so user navigation is saved!
-    setHistory(prev => prev.map(item => {
-      if (item.file_name === result.file_name && item.industry === result.industry) {
-        return {
-          ...item,
-          extracted_data: updatedData,
-          extracted_fields: updatedExtractedFields,
-          validation: updatedValidation,
-          overall_status: nextStatus
-        };
-      }
-      return item;
-    }));
+      const updatedResult: ProcessResponse = data;
+      setResult(updatedResult);
+      // Refresh database items
+      fetchDocuments(user.token);
+    } catch (err: any) {
+      triggerError(err.message);
+    }
   };
 
-  const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
   const [isDownloading, setIsDownloading] = useState(false);
-
   const handleDownloadUpdatedPdf = async () => {
-    if (!result || !selectedIndustry || result.overall_status !== "ready_for_review") return;
-    
+    if (!result || !selectedIndustry || !user) return;
     setIsDownloading(true);
     try {
       const response = await fetch(`${apiUrl}/api/generate-pdf`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
         },
         body: JSON.stringify({
           file_name: result.file_name,
@@ -568,20 +585,14 @@ export default function Home() {
           original_data: originalData
         })
       });
-      
-      if (!response.ok) {
-        throw new Error("Failed to generate updated PDF summary copy.");
-      }
+      if (!response.ok) throw new Error("Failed to generate updated PDF.");
       
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      
       let baseName = result.file_name;
-      if (baseName.toLowerCase().endsWith(".pdf")) {
-        baseName = baseName.slice(0, -4);
-      }
+      if (baseName.toLowerCase().endsWith(".pdf")) baseName = baseName.slice(0, -4);
       a.download = `${baseName}-updated.pdf`;
       document.body.appendChild(a);
       a.click();
@@ -595,10 +606,8 @@ export default function Home() {
   };
 
   const [isDownloadingAll, setIsDownloadingAll] = useState(false);
-
   const handleDownloadAllProcessedData = async () => {
-    if (history.length === 0) return;
-    
+    if (history.length === 0 || !user) return;
     setIsDownloadingAll(true);
     try {
       const payloadItems = history.map(item => ({
@@ -610,24 +619,20 @@ export default function Home() {
         overall_status: item.overall_status,
         original_data: item.original_data || item.extracted_data
       }));
-      
       const response = await fetch(`${apiUrl}/api/generate-combined-report`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
         },
         body: JSON.stringify({ items: payloadItems })
       });
-      
-      if (!response.ok) {
-        throw new Error("Failed to compile combined PDF summary report.");
-      }
+      if (!response.ok) throw new Error("Failed to compile combined PDF summary report.");
       
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      
       const timestamp = new Date().toISOString().split('T')[0];
       a.download = `processed_documents_report_${timestamp}.pdf`;
       document.body.appendChild(a);
@@ -641,55 +646,216 @@ export default function Home() {
     }
   };
 
-  const handleDownloadHistoryItemPdf = async (item: SessionResult) => {
+  const handleSendEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recipientEmail || history.length === 0 || !user) return;
+    setIsSendingEmail(true);
+    setErrorMessage(null);
     try {
-      const response = await fetch(`${apiUrl}/api/generate-pdf`, {
+      const payloadItems = history.map(item => ({
+        file_name: item.file_name,
+        industry: item.industry,
+        document_type: item.document_type,
+        extracted_data: item.extracted_data,
+        validation: item.validation,
+        overall_status: item.overall_status,
+        original_data: item.original_data || item.extracted_data
+      }));
+      const response = await fetch(`${apiUrl}/api/send-email`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
         },
         body: JSON.stringify({
-          file_name: item.file_name,
-          industry: item.industry,
-          document_type: item.document_type,
-          extracted_data: item.extracted_data,
-          validation: item.validation,
-          overall_status: item.overall_status,
-          original_data: item.original_data || item.extracted_data
+          recipient_email: recipientEmail,
+          items: payloadItems
         })
       });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Email dispatch failed.");
       
-      if (!response.ok) {
-        throw new Error("Failed to generate PDF summary.");
-      }
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      
-      let baseName = item.file_name;
-      if (baseName.toLowerCase().endsWith(".pdf")) {
-        baseName = baseName.slice(0, -4);
-      }
-      a.download = `${baseName}-updated.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      alert("Report emailed successfully!");
+      setShowEmailModal(false);
+      setRecipientEmail("");
     } catch (err: any) {
-      triggerError(err.message || "Failed to download PDF summary.");
+      triggerError(err.message);
+    } finally {
+      setIsSendingEmail(false);
     }
   };
 
-  const handleUpdateAndRevalidate = () => {
-    triggerRevalidateWithInputs(manualInputs);
+  // Inline Custom Fields Creation
+  const handleInlineCreateField = async () => {
+    if (!result || !user) return;
+    setErrorMessage(null);
+    try {
+      const cleanName = newFieldLabel.toLowerCase().replace(/[^a-z0-9_]/g, "").replace(/\s+/g, "_");
+      if (!cleanName) throw new Error("Please enter a valid field label.");
+
+      const payload = {
+        name: cleanName,
+        label: newFieldLabel,
+        industry: result.industry,
+        document_type: result.document_type,
+        field_type: newFieldType,
+        required: newFieldRequired,
+        active: true,
+        display_order: dynamicFields.length + 10,
+        validation_rules: "{}"
+      };
+
+      const response = await fetch(`${apiUrl}/api/fields`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${user.token}`
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to save dynamic field configuration.");
+      
+      setShowAddFieldForm(false);
+      setNewFieldLabel("");
+      setNewFieldType("text");
+      setNewFieldRequired(false);
+      fetchFields(user.token);
+    } catch (err: any) {
+      triggerError(err.message);
+    }
   };
 
-  const handleClearHistory = () => {
-    setHistory([]);
+  const handleToggleFieldActive = async (fieldId: number) => {
+    if (!user) return;
+    try {
+      const response = await fetch(`${apiUrl}/api/fields/${fieldId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${user.token}` }
+      });
+      if (response.ok) {
+        fetchFields(user.token);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
+  // Get active fields based on current context
+  const getContextFields = () => {
+    if (!selectedIndustry) return [];
+    const docType = result?.document_type;
+    let list = dynamicFields.filter(f => f.industry === selectedIndustry && f.active === 1);
+    if (docType) {
+      const subset = list.filter(f => f.document_type === docType);
+      if (subset.length > 0) list = subset;
+    }
+    return list.sort((a, b) => a.display_order - b.display_order);
+  };
+
+  // Rendering Authentication Screen if not logged in
+  if (!user) {
+    return (
+      <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "flex", justifyContent: "center", alignItems: "center" }}>
+        <div className="bg-grid-overlay" />
+        <div className="bg-radial-glow" />
+        <div className="glass-panel" style={{ padding: "40px", maxWidth: "480px", width: "100%", margin: "20px", display: "flex", flexDirection: "column", gap: "24px" }}>
+          <div style={{ textAlign: "center" }}>
+            <h2 style={{ fontSize: "28px", fontWeight: 800, letterSpacing: "-0.5px" }}>
+              AI Document Automation
+            </h2>
+            <p style={{ color: "var(--text-secondary)", fontSize: "14px", marginTop: "8px" }}>
+              {authView === "login" ? "Login to access secure dashboard tools" : "Create your account"}
+            </p>
+          </div>
+
+          {errorMessage && (
+            <div style={{ padding: "12px", background: "var(--invalid-glow)", border: "1px solid rgba(220,38,38,0.2)", borderRadius: "8px", color: "var(--invalid-color)", fontSize: "13px" }}>
+              {errorMessage}
+            </div>
+          )}
+
+          {authSuccessMessage && (
+            <div style={{ padding: "12px", background: "var(--valid-glow)", border: "1px solid rgba(5,150,105,0.2)", borderRadius: "8px", color: "var(--valid-color)", fontSize: "13px" }}>
+              {authSuccessMessage}
+            </div>
+          )}
+
+          <form onSubmit={authView === "login" ? handleLogin : handleRegister} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {authView === "register" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)" }}>Full Name</label>
+                <input 
+                  type="text" 
+                  required 
+                  className="form-input" 
+                  style={{ width: "100%", padding: "12px", background: "#ffffff", border: "1px solid var(--panel-border)", borderRadius: "8px", outline: "none" }}
+                  value={authName} 
+                  onChange={(e) => setAuthName(e.target.value)} 
+                />
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)" }}>Email Address</label>
+              <input 
+                type="email" 
+                required 
+                className="form-input" 
+                style={{ width: "100%", padding: "12px", background: "#ffffff", border: "1px solid var(--panel-border)", borderRadius: "8px", outline: "none" }}
+                value={authEmail} 
+                onChange={(e) => setAuthEmail(e.target.value)} 
+              />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)" }}>Password</label>
+              <input 
+                type="password" 
+                required 
+                className="form-input" 
+                style={{ width: "100%", padding: "12px", background: "#ffffff", border: "1px solid var(--panel-border)", borderRadius: "8px", outline: "none" }}
+                value={authPassword} 
+                onChange={(e) => setAuthPassword(e.target.value)} 
+              />
+            </div>
+            {authView === "register" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-secondary)" }}>Confirm Password</label>
+                <input 
+                  type="password" 
+                  required 
+                  className="form-input" 
+                  style={{ width: "100%", padding: "12px", background: "#ffffff", border: "1px solid var(--panel-border)", borderRadius: "8px", outline: "none" }}
+                  value={authConfirmPassword} 
+                  onChange={(e) => setAuthConfirmPassword(e.target.value)} 
+                />
+              </div>
+            )}
+            <button type="submit" className="btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: "8px" }}>
+              {authView === "login" ? "Login" : "Register"}
+            </button>
+          </form>
+
+          <div style={{ textAlign: "center", borderTop: "1px solid var(--panel-border)", paddingTop: "16px" }}>
+            <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+              {authView === "login" ? "Don't have an account? " : "Already have an account? "}
+              <button 
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--accent-color)", fontWeight: 600, textDecoration: "underline", padding: 0 }}
+                onClick={() => {
+                  setAuthView(authView === "login" ? "register" : "login");
+                  setErrorMessage(null);
+                  setAuthSuccessMessage(null);
+                }}
+              >
+                {authView === "login" ? "Register" : "Login"}
+              </button>
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Rendering dashboard navigation & tabs
   return (
     <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div className="bg-grid-overlay" />
@@ -699,19 +865,26 @@ export default function Home() {
       <header style={{ borderBottom: "1px solid var(--panel-border)", padding: "16px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(255, 255, 255, 0.8)", backdropFilter: "blur(12px)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: "var(--accent-gradient)", display: "flex", alignItems: "center", justifyItems: "center", justifyContent: "center", fontWeight: 800, color: "#fff" }}>AI</div>
-          <span style={{ fontSize: "18px", fontWeight: 700, letterSpacing: "-0.5px" }}>Document Automation <span style={{ fontSize: "11px", opacity: 0.8, background: "rgba(15,23,42,0.05)", color: "var(--text-secondary)", padding: "2px 6px", borderRadius: "4px", marginLeft: "6px" }}>MVP</span></span>
+          <span style={{ fontSize: "18px", fontWeight: 700, letterSpacing: "-0.5px" }}>Document Automation</span>
+          {step > 1 && (
+            <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "12.5px", marginLeft: "16px", display: "flex", alignItems: "center", gap: "6px" }} onClick={handleBack}>
+              <ArrowLeftIcon /> Change Category
+            </button>
+          )}
         </div>
-        {step > 1 && (
-          <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleBack}>
-            <ArrowLeftIcon /> Change Industry
-          </button>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ fontSize: "13px", fontWeight: 600 }}>{user.name}</span>
+            <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "12px", borderColor: "rgba(220,38,38,0.2)", color: "var(--invalid-color)" }} onClick={handleLogout}>
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* Main Viewport */}
       <main style={{ flex: 1, padding: "40px 32px", maxWidth: "1400px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "32px" }}>
         
-        {/* Error message strip */}
         {errorMessage && (
           <div className={`glass-panel ${shakeError ? "shake-animation" : ""}`} style={{ borderColor: "rgba(239, 68, 68, 0.2)", padding: "16px 20px", display: "flex", alignItems: "center", gap: "12px", background: "var(--invalid-glow)" }}>
             <span style={{ color: "var(--invalid-color)", display: "inline-flex" }}><AlertIcon /></span>
@@ -725,7 +898,7 @@ export default function Home() {
             <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: "12px" }}>
               <h1 style={{ fontSize: "36px", fontWeight: 800, letterSpacing: "-1px" }}>AI-Driven Document Extraction</h1>
               <p style={{ color: "var(--text-secondary)", fontSize: "16px", maxWidth: "600px", margin: "0 auto" }}>
-                Select an industry configuration to apply custom LLM structured extraction prompt rules and deterministic validators.
+                Select an industry configuration to apply custom dynamic LLM structured extraction prompt rules and deterministic validators.
               </p>
             </div>
 
@@ -775,6 +948,44 @@ export default function Home() {
                 </button>
               </div>
             </div>
+
+            {/* Session History Container */}
+            {history.length > 0 && (
+              <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(15,23,42,0.05)", paddingBottom: "12px" }}>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700 }}>Processed Session Documents Logs</h3>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => setShowEmailModal(true)}>
+                      Send via Email
+                    </button>
+                    <button className="btn-secondary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={handleDownloadAllProcessedData} disabled={isDownloadingAll}>
+                      {isDownloadingAll ? <Spinner /> : "Download All Processed Data"}
+                    </button>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  {history.map((item) => (
+                    <div key={item.id} className="validation-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        <span style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{item.timestamp}</span>
+                        <span style={{ fontWeight: 700 }}>{item.file_name}</span>
+                        <span style={{ fontSize: "11px", textTransform: "capitalize", padding: "2px 6px", borderRadius: "4px", background: "rgba(15,23,42,0.05)" }}>{item.industry}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: item.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)" }}>
+                          {item.overall_status === "ready_for_review" ? "Complete ✓" : "Needs Review ⚠"}
+                        </span>
+                        <div style={{ display: "flex", gap: "6px" }}>
+                          <button className="btn-secondary" style={{ padding: "4px 8px", fontSize: "12.5px" }} onClick={() => handleSelectHistoryItem(item)}>
+                            View
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -896,7 +1107,7 @@ export default function Home() {
         {/* SCREEN 3: PDF SPLIT PREVIEW & RESULTS COMPONENT */}
         {step === 3 && selectedIndustry && file && (
           !result ? (
-            /* BEFORE PROCESSING: 50/50 Split (PDF Preview left, Placeholders & Control right) */
+            /* BEFORE PROCESSING: 50/50 Split */
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "32px", alignItems: "start" }}>
               
               {/* Left side PDF Embed Preview */}
@@ -939,10 +1150,8 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Right side Extraction Results Panel */}
+              {/* Right side Extraction Controls */}
               <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-                
-                {/* Operations Control box */}
                 <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <h3 style={{ fontSize: "16px", fontWeight: 600 }}>Processing Controls</h3>
@@ -951,511 +1160,212 @@ export default function Home() {
                     </span>
                   </div>
 
-                  {!isProcessing && (
+                  {!isProcessing ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                       <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-                        Document is loaded and ready. Click &quot;Process Document&quot; to parse plain text, extract information using OpenAI structure filters, and apply validation schemas.
+                        Document loaded. Click &quot;Process Document&quot; to perform structural extraction and validator checks.
                       </p>
                       <button className="btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={handleProcessDocument}>
                         Process Document
                       </button>
                     </div>
-                  )}
-
-                  {isProcessing && (
+                  ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "12px", padding: "10px 0" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                         <span style={{ color: "var(--accent-color)" }}><Spinner /></span>
-                        <span style={{ fontWeight: 600, fontSize: "14px" }}>AI Engine Active</span>
+                        <span style={{ fontWeight: 600, fontSize: "14px" }}>AI Fallback Chain Active</span>
                       </div>
-                      <p style={{ fontSize: "13px", color: "var(--text-secondary)", animation: "pulse 1.5s infinite" }}>
+                      <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
                         {processingStatus}
                       </p>
                     </div>
                   )}
                 </div>
-
-                {/* Data Extraction Display Box (Placeholders) */}
-                <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}>
-                  <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
-                    Extracted Information
-                  </h3>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-                    <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "12px", padding: "16px", border: "1px solid rgba(255,255,255,0.04)" }}>
-                      {INDUSTRY_FIELDS[selectedIndustry].map((field) => (
-                        <div key={field} className="data-row">
-                          <span className="data-label">{field.replace(/_/g, " ")}</span>
-                          <span className="data-value" style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "13.5px" }}>
-                            [Awaiting Extraction]
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
           ) : (
-            activeTab === "existing" ? (
-              /* EXISTING DATA VALIDATION WORKFLOW SCREEN */
-              <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
-                
-                {/* Header card indicating status */}
-                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? (result.ai_provider === "Groq" ? "#7d52e9" : result.ai_provider === "Mistral" ? "#2563eb" : "var(--valid-color)") : "var(--invalid-color)"}` }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <h3 style={{ fontSize: "17px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Loaded & Validated</h3>
-                      {result.overall_status === "ready_for_review" ? (
-                        <div className="status-badge ready" style={{ 
-                          display: "flex", 
-                          alignItems: "center", 
-                          gap: "4px", 
-                          background: result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.1)" : result.ai_provider === "Mistral" ? "rgba(37, 99, 235, 0.1)" : "rgba(22, 163, 74, 0.1)", 
-                          color: result.ai_provider === "Groq" ? "#7d52e9" : result.ai_provider === "Mistral" ? "#2563eb" : "#16a34a", 
-                          border: `1px solid ${result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.2)" : result.ai_provider === "Mistral" ? "rgba(37, 99, 235, 0.2)" : "rgba(22, 163, 74, 0.2)"}`,
-                          padding: "4px 8px", 
-                          borderRadius: "4px", 
-                          fontSize: "12px", 
-                          fontWeight: 700 
-                        }}>
-                          <CheckIcon /> Complete
-                        </div>
-                      ) : (
-                        <div className="status-badge review" style={{ display: "flex", alignItems: "center", gap: "4px", background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: 700 }}>
-                          <AlertIcon /> Needs Review
-                        </div>
-                      )}
-                    </div>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
-                      Industry: <strong style={{ textTransform: "capitalize" }}>{selectedIndustry}</strong> • File: {file.name}
-                    </p>
+            /* AFTER PROCESSING: Results Display and Corrections Form */
+            <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
+              
+              {/* Header card indicating status */}
+              <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? (result.ai_provider === "Groq" ? "#7d52e9" : result.ai_provider === "Mistral" ? "#2563eb" : "var(--valid-color)") : "var(--invalid-color)"}` }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <h3 style={{ fontSize: "17px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Loaded & Validated</h3>
+                    {result.overall_status === "ready_for_review" ? (
+                      <div className="status-badge ready" style={{ 
+                        display: "flex", 
+                        alignItems: "center", 
+                        gap: "4px", 
+                        background: result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.1)" : result.ai_provider === "Mistral" ? "rgba(37, 99, 235, 0.1)" : "rgba(22, 163, 74, 0.1)", 
+                        color: result.ai_provider === "Groq" ? "#7d52e9" : result.ai_provider === "Mistral" ? "#2563eb" : "#16a34a", 
+                        border: `1px solid ${result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.2)" : result.ai_provider === "Mistral" ? "rgba(37, 99, 235, 0.2)" : "rgba(22, 163, 74, 0.2)"}`,
+                        padding: "4px 8px", 
+                        borderRadius: "4px", 
+                        fontSize: "12px", 
+                        fontWeight: 700 
+                      }}>
+                        <CheckIcon /> Ready for Review
+                      </div>
+                    ) : (
+                      <div className="status-badge review" style={{ display: "flex", alignItems: "center", gap: "4px", background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: 700 }}>
+                        <AlertIcon /> Needs Review
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: "flex", gap: "10px" }}>
-                    <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
-                      Re-Process
-                    </button>
-                    <button 
-                      className="btn-primary" 
-                      style={{ padding: "8px 16px", fontSize: "13px" }} 
-                      onClick={() => { setFile(null); setFileUrl(null); setResult(null); setStep(2); }}
-                    >
-                      Process Another Document
-                    </button>
+                  <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
+                    Industry: <strong style={{ textTransform: "capitalize" }}>{selectedIndustry}</strong> • Document Type: <strong>{result.document_type.replace(/_/g, " ").toUpperCase()}</strong> • File: {file.name}
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
+                    Re-Process
+                  </button>
+                  <button 
+                    className="btn-primary" 
+                    style={{ padding: "8px 16px", fontSize: "13px" }} 
+                    onClick={() => { setFile(null); setFileUrl(null); setResult(null); setStep(2); }}
+                  >
+                    Process Another
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
+                
+                {/* Left Column: Document Preview */}
+                <div className="glass-panel" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                  <h3 style={{ fontSize: "15px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
+                    Document Preview
+                  </h3>
+                  <div className="preview-container" style={{ height: "550px", width: "100%", background: "#f8fafc", borderRadius: "8px" }}>
+                    {fileUrl ? (
+                      <object 
+                        key={fileUrl}
+                        data={fileUrl} 
+                        type="application/pdf"
+                        style={{ width: "100%", height: "100%", borderRadius: "8px", border: "none" }}
+                      >
+                        <div className="preview-placeholder" style={{ padding: "40px", textAlign: "center" }}>
+                          <span style={{ fontSize: "13.5px", color: "var(--text-secondary)" }}>PDF preview not supported by browser. <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", color: "var(--accent-color)" }}>Open PDF in new tab</a></span>
+                        </div>
+                      </object>
+                    ) : (
+                      <div className="preview-placeholder" style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+                        <span style={{ fontSize: "13.5px" }}>No PDF source loaded. View extracted metadata logs below.</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* 50/50 Layout Side-by-Side: PDF Preview left, Validation right */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
-                  
-                  {/* Left Column: PDF Preview */}
-                  <div className="glass-panel" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                    <h3 style={{ fontSize: "15px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
-                      Uploaded Document Preview
+                {/* Right Column: Dynamic Form Fields and Validation Rules */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                  <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(15, 23, 42, 0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
+                      Data Validation & Completion
                     </h3>
-                    <div className="preview-container" style={{ height: "550px", width: "100%", background: "#f8fafc", borderRadius: "8px" }}>
-                      {fileUrl ? (
-                        <object 
-                          key={fileUrl}
-                          data={fileUrl} 
-                          type="application/pdf"
-                          style={{ width: "100%", height: "100%", borderRadius: "8px", border: "none" }}
-                        >
-                          <div className="preview-placeholder" style={{ padding: "40px", textAlign: "center" }}>
-                            <span style={{ fontSize: "13.5px", color: "var(--text-secondary)" }}>PDF preview not supported by browser. <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", color: "var(--accent-color)" }}>Open PDF in new tab</a></span>
-                          </div>
-                        </object>
-                      ) : (
-                        <div className="preview-placeholder" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: "10px" }}>
-                          <Spinner />
-                          <span>Loading preview...</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
 
-                  {/* Right Column: Validation & Completion Forms */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-                    
-                    <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                      <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
-                        Existing Data Validation Checklist
-                      </h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                      {getContextFields().map((f) => {
+                        const key = f.name;
+                        const val = result.extracted_data[key];
+                        const isApplicable = result.extracted_fields?.[key]?.applicable !== false;
+                        const isValid = result.validation[key]?.valid !== false;
 
-                      {result.overall_status === "ready_for_review" ? (
-                        <div style={{ background: "rgba(22, 163, 74, 0.08)", border: "1px solid rgba(22, 163, 74, 0.2)", padding: "12px", borderRadius: "8px", color: "#16a34a", fontSize: "13px", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                          <span>✓</span>
-                          <span>All fields validated! You can now download the updated PDF summary below.</span>
-                        </div>
-                      ) : (
-                        <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", padding: "12px", borderRadius: "8px", color: "#ef4444", fontSize: "13px", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                          <span>⚠</span>
-                          <span>Missing or incorrect fields detected. Please correct them below, click &apos;Save / Update&apos;, and then download the updated PDF.</span>
-                        </div>
-                      )}
+                        let statusText = "✓ Valid";
+                        let statusColor = "var(--valid-color)";
+                        let showInput = false;
 
-                      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                        {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
-                          const val = result.extracted_data[key];
-                          
-                          const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
-                          const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-                          
-                          let displayName = key.replace(/_/g, " ");
-                          if (key === "accident_date") {
-                            displayName = isAccidentPol ? "Accident Date" : "Incident Date";
-                          }
-                          
-                          const isApplicable = result.extracted_fields?.[key]?.applicable !== false;
-                          const isValid = result.validation[key]?.valid !== false;
-                          
-                          let statusText = "✓ Available / Valid";
-                          let statusColor = "#16a34a"; // Green
-                          let showInput = false;
+                        if (!isApplicable) {
+                          statusText = "— Not Applicable";
+                          statusColor = "#64748b";
+                        } else if (val === null || val === undefined || String(val).trim() === "") {
+                          statusText = f.required === 1 ? "⚠ Data Missing" : "✓ Empty (Optional)";
+                          statusColor = f.required === 1 ? "#ea580c" : "var(--valid-color)";
+                          if (f.required === 1) showInput = true;
+                        } else if (!isValid) {
+                          statusText = "⚠ Incorrect / Inconsistent";
+                          statusColor = "var(--invalid-color)";
+                          showInput = true;
+                        }
 
-                          if (!isApplicable) {
-                            statusText = "— Not Applicable";
-                            statusColor = "#64748b"; // Slate Gray
-                          } else if (val === null || val === undefined || String(val).trim() === "") {
-                            statusText = "⚠ Data Missing";
-                            statusColor = "#ea580c"; // Orange
-                            showInput = true;
-                          } else if (!isValid) {
-                            statusText = "⚠ Incorrect / Inconsistent";
-                            statusColor = "#ef4444"; // Red
-                            showInput = true;
-                          }
-
-                          // If explicitly toggled to edit mode
-                          const isEditing = !!editingFields[key];
-                          if (isEditing && isApplicable) {
-                            showInput = true;
-                          }
-
-                          return (
-                            <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(15,23,42,0.05)", paddingBottom: "16px" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: "10px" }}>
-                                <div style={{ display: "flex", flexDirection: "column" }}>
-                                  <span style={{ fontSize: "14px", fontWeight: 700, textTransform: "capitalize", color: "var(--text-primary)" }}>
-                                    {displayName}
+                        return (
+                          <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(15,23,42,0.05)", paddingBottom: "16px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: "10px" }}>
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
+                                  {f.label}
+                                </span>
+                                {val !== null && val !== "" && isApplicable && !showInput && (
+                                  <span style={{ fontSize: "13.5px", color: "var(--text-secondary)", marginTop: "4px" }}>
+                                    {String(val)}
                                   </span>
-                                  {val !== null && val !== "" && isApplicable && !showInput && (
-                                    <span style={{ fontSize: "13.5px", color: "var(--text-secondary)", marginTop: "4px" }}>
-                                      {key === "amount" ? (String(val).startsWith("$") ? String(val) : `$${val}`) : String(val)}
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                  <span style={{ fontSize: "12px", fontWeight: 700, color: statusColor, textTransform: "uppercase" }}>
-                                    {statusText}
-                                  </span>
-                                  {isApplicable && !showInput && (
+                                )}
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <span style={{ fontSize: "12px", fontWeight: 700, color: statusColor, textTransform: "uppercase" }}>
+                                  {statusText}
+                                </span>
+                                {isApplicable && !showInput && (
+                                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                                     <button 
                                       style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "11px", color: "var(--accent-color)", fontWeight: 600, textDecoration: "underline", padding: 0 }}
-                                      onClick={() => setEditingFields({ ...editingFields, [key]: true })}
+                                      onClick={() => setEditingFieldId(f.id)}
                                     >
                                       Edit
                                     </button>
-                                  )}
-                                </div>
-                              </div>
-
-                              {showInput && (
-                                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px", width: "100%", background: "rgba(15, 23, 42, 0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(15, 23, 42, 0.06)" }}>
-                                  <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
-                                    {val === null || val === "" ? "Provide Missing Value:" : "Correct Value:"}
-                                  </span>
-                                  {key.toLowerCase().includes("date") || key === "date_of_birth" ? (
-                                    <input 
-                                      type="date" 
-                                      className="form-input" 
-                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                      value={manualInputs[key] || ""} 
-                                      onChange={(e) => {
-                                        const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                        setManualInputs(nextInputs);
-                                        triggerRevalidateWithInputs(nextInputs);
-                                      }}
-                                    />
-                                  ) : key === "policy_type" ? (
-                                    <select 
-                                      className="form-input" 
-                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                      value={manualInputs[key] || ""} 
-                                      onChange={(e) => {
-                                        const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                        setManualInputs(nextInputs);
-                                        triggerRevalidateWithInputs(nextInputs);
-                                      }}
+                                    <button 
+                                      style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "11px", color: "var(--invalid-color)", display: "flex", alignItems: "center" }}
+                                      onClick={() => handleToggleFieldActive(f.id)}
+                                      title="Delete Field"
                                     >
-                                      <option value="">-- Select Policy Type --</option>
-                                      <option value="Health Insurance">Health Insurance</option>
-                                      <option value="Life Insurance">Life Insurance</option>
-                                      <option value="Motor/Auto Insurance">Motor/Auto Insurance</option>
-                                      <option value="Home Insurance">Home Insurance</option>
-                                      <option value="Travel Insurance">Travel Insurance</option>
-                                      <option value="Personal Accident Insurance">Personal Accident Insurance</option>
-                                    </select>
-                                  ) : key === "category" ? (
-                                    <select 
-                                      className="form-input" 
-                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                      value={manualInputs[key] || ""} 
-                                      onChange={(e) => {
-                                        const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                        setManualInputs(nextInputs);
-                                        triggerRevalidateWithInputs(nextInputs);
-                                      }}
-                                    >
-                                      <option value="">-- Select Category --</option>
-                                      <option value="Travel">Travel</option>
-                                      <option value="Meals">Meals</option>
-                                      <option value="Office Supplies">Office Supplies</option>
-                                      <option value="Software">Software</option>
-                                      <option value="Others">Others</option>
-                                    </select>
-                                  ) : key === "amount" ? (
-                                    <input 
-                                      type="number" 
-                                      placeholder="Enter amount (e.g. 250.00)"
-                                      className="form-input" 
-                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                      value={manualInputs[key] || ""} 
-                                      onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
-                                      onBlur={() => triggerRevalidateWithInputs(manualInputs)}
-                                    />
-                                  ) : (
-                                    <input 
-                                      type="text" 
-                                      placeholder={`Enter ${displayName.replace(/\b\w/g, c => c.toUpperCase())}`}
-                                      className="form-input" 
-                                      style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                      value={manualInputs[key] || ""} 
-                                      onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
-                                      onBlur={() => triggerRevalidateWithInputs(manualInputs)}
-                                    />
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      {/* Save / Update button */}
-                      <button 
-                        className="btn-primary" 
-                        style={{ marginTop: "16px", width: "100%", justifyContent: "center", display: "flex", gap: "8px" }}
-                        onClick={() => {
-                          handleUpdateAndRevalidate();
-                          setEditingFields({});
-                        }}
-                      >
-                        Update
-                      </button>
-                    </div>
-
-                    {/* Overall Status block and Download Button */}
-                    <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(15,23,42,0.05)", paddingBottom: "12px" }}>
-                        <div style={{ display: "flex", flexDirection: "column" }}>
-                          <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
-                            Overall Dataset Status:
-                          </span>
-                          <span style={{ fontSize: "18px", fontWeight: 800, color: result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)", marginTop: "4px" }}>
-                            {result.overall_status === "ready_for_review" ? "✓ Complete" : "⚠ Needs Review"}
-                          </span>
-                        </div>
-                      </div>
-
-                      <button
-                        className="btn-primary"
-                        style={{ 
-                          width: "100%", 
-                          justifyContent: "center", 
-                          padding: "12px", 
-                          background: result.overall_status === "ready_for_review" ? "var(--accent-gradient)" : "#cbd5e1",
-                          color: result.overall_status === "ready_for_review" ? "#ffffff" : "#94a3b8",
-                          border: "none",
-                          cursor: result.overall_status === "ready_for_review" ? "pointer" : "not-allowed",
-                          opacity: result.overall_status === "ready_for_review" ? 1 : 0.6,
-                          pointerEvents: result.overall_status === "ready_for_review" ? "auto" : "none",
-                          boxShadow: result.overall_status === "ready_for_review" ? "0 4px 12px rgba(99, 102, 241, 0.2)" : "none"
-                        }}
-                        disabled={result.overall_status !== "ready_for_review" || isDownloading}
-                        onClick={handleDownloadUpdatedPdf}
-                      >
-                        {isDownloading ? <Spinner /> : "Download Updated PDF"}
-                      </button>
-                    </div>
-
-                  </div>
-                </div>
-
-              </div>
-            ) : (
-              /* legacy PROCESS NEW DOCUMENT WORKFLOW SCREEN */
-              <div style={{ maxWidth: "1200px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "24px" }}>
-                
-                {/* Header card indicating success */}
-                <div className="glass-panel" style={{ padding: "20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderLeft: `4px solid ${result.overall_status === "ready_for_review" ? (result.ai_provider === "Groq" ? "#7d52e9" : result.ai_provider === "Mistral" ? "#2563eb" : "var(--valid-color)") : "var(--invalid-color)"}` }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                      <h3 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text-primary)" }}>✓ Document Processed Successfully</h3>
-                      {result.overall_status === "ready_for_review" ? (
-                        <div className="status-badge ready" style={{
-                          background: result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.08)" : result.ai_provider === "Mistral" ? "rgba(37, 99, 235, 0.08)" : "var(--valid-glow)",
-                          color: result.ai_provider === "Groq" ? "#7d52e9" : result.ai_provider === "Mistral" ? "#2563eb" : "var(--valid-color)",
-                          border: `1px solid ${result.ai_provider === "Groq" ? "rgba(139, 92, 246, 0.2)" : result.ai_provider === "Mistral" ? "rgba(37, 99, 235, 0.2)" : "rgba(5, 150, 105, 0.2)"}`
-                        }}>
-                          <CheckIcon /> Ready for Review
-                        </div>
-                      ) : (
-                        <div className="status-badge review">
-                          <AlertIcon /> Needs Review
-                        </div>
-                      )}
-                    </div>
-                    <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
-                      Industry: <strong style={{ textTransform: "capitalize" }}>{selectedIndustry}</strong> • File: {file.name}
-                    </p>
-                  </div>
-                  <div style={{ display: "flex", gap: "10px" }}>
-
-                    <button className="btn-secondary" style={{ padding: "8px 16px", fontSize: "13px" }} onClick={handleProcessDocument} disabled={isProcessing}>
-                      Re-Process
-                    </button>
-                    <button 
-                      className="btn-primary" 
-                      style={{ padding: "8px 16px", fontSize: "13px" }} 
-                      onClick={() => { setFile(null); setFileUrl(null); setResult(null); setStep(2); }}
-                    >
-                      Process Another Document
-                    </button>
-                  </div>
-                </div>
-
-                {/* Extraction & Validation detail container (50/50 split side-by-side) */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
-                  
-                  {/* Section 1: Extracted Information */}
-                  <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                    <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
-                      Extracted Information
-                    </h3>
-                    
-                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                      {INDUSTRY_FIELDS[selectedIndustry].map((key) => {
-                        const val = result.extracted_data[key];
-                        
-                        const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
-                        const isAccidentPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-                        
-                        let displayName = key.replace(/_/g, " ");
-                        if (key === "accident_date") {
-                          displayName = isAccidentPol ? "Accident Date" : "Incident Date";
-                        }
-                        
-                        const isApplicable = result.extracted_fields?.[key]?.applicable !== false;
-                        const isValid = result.validation[key]?.valid !== false;
-                        
-                        // 1. If not applicable, show the field as [Not Applicable]
-                        if (!isApplicable) {
-                          return (
-                            <div key={key} className="data-row" style={{ opacity: 0.5 }}>
-                              <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
-                              <span className="data-value" style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "13px" }}>[Not Applicable]</span>
-                            </div>
-                          );
-                        }
-                        
-                        return (
-                          <div key={key} style={{ display: "flex", flexDirection: "column", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: "12px" }}>
-                            <div className="data-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
-                              <span className="data-label" style={{ textTransform: "capitalize" }}>{displayName}</span>
-                              <span className="data-value">
-                                {val === null || val === "" || !isValid ? (
-                                  <span style={{ color: "var(--invalid-color)", fontWeight: 600 }}>[Awaiting Input]</span>
-                                ) : (
-                                  key === "amount" ? (String(val).startsWith("$") ? String(val) : `$${val}`) : String(val)
+                                      <TrashIcon />
+                                    </button>
+                                  </div>
                                 )}
-                              </span>
+                              </div>
                             </div>
-                            
-                            {/* Render input form if value is missing/invalid */}
-                            {!isValid && (
-                              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px", width: "100%", background: "rgba(239, 68, 68, 0.05)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.15)" }}>
-                                <span style={{ fontSize: "11px", fontWeight: 700, color: "#dc2626", textTransform: "uppercase", display: "flex", alignItems: "center", gap: "4px" }}>
-                                  ⚠ Data Missing
+
+                            {(showInput || editingFieldId === f.id) && (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "10px", width: "100%", background: "rgba(15, 23, 42, 0.02)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(15, 23, 42, 0.06)" }}>
+                                <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+                                  Enter Correct Value:
                                 </span>
-                                {key.toLowerCase().includes("date") || key === "date_of_birth" ? (
+                                
+                                {f.field_type === "date" ? (
                                   <input 
                                     type="date" 
                                     className="form-input" 
-                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                    value={manualInputs[key] || ""} 
-                                    onChange={(e) => {
-                                      const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                      setManualInputs(nextInputs);
-                                      triggerRevalidateWithInputs(nextInputs);
-                                    }}
-                                  />
-                                ) : key === "policy_type" ? (
-                                  <select 
-                                    className="form-input" 
-                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                    value={manualInputs[key] || ""} 
-                                    onChange={(e) => {
-                                      const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                      setManualInputs(nextInputs);
-                                      triggerRevalidateWithInputs(nextInputs);
-                                    }}
-                                  >
-                                    <option value="">-- Select Policy Type --</option>
-                                    <option value="Health Insurance">Health Insurance</option>
-                                    <option value="Life Insurance">Life Insurance</option>
-                                    <option value="Motor/Auto Insurance">Motor/Auto Insurance</option>
-                                    <option value="Home Insurance">Home Insurance</option>
-                                    <option value="Travel Insurance">Travel Insurance</option>
-                                    <option value="Personal Accident Insurance">Personal Accident Insurance</option>
-                                  </select>
-                                ) : key === "category" ? (
-                                  <select 
-                                    className="form-input" 
-                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
-                                    value={manualInputs[key] || ""} 
-                                    onChange={(e) => {
-                                      const nextInputs = { ...manualInputs, [key]: e.target.value };
-                                      setManualInputs(nextInputs);
-                                      triggerRevalidateWithInputs(nextInputs);
-                                    }}
-                                  >
-                                    <option value="">-- Select Category --</option>
-                                    <option value="Travel">Travel</option>
-                                    <option value="Meals">Meals</option>
-                                    <option value="Office Supplies">Office Supplies</option>
-                                    <option value="Software">Software</option>
-                                    <option value="Others">Others</option>
-                                  </select>
-                                ) : key === "amount" ? (
-                                  <input 
-                                    type="number" 
-                                    placeholder="Enter amount (e.g. 250.00)"
-                                    className="form-input" 
-                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", outline: "none" }}
                                     value={manualInputs[key] || ""} 
                                     onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
-                                    onBlur={() => triggerRevalidateWithInputs(manualInputs)}
+                                  />
+                                ) : f.field_type === "select" ? (
+                                  <select 
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", outline: "none" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
+                                  >
+                                    <option value="">-- Select Option --</option>
+                                    {(JSON.parse(f.validation_rules || '{"options":[]}').options || []).map((o: string) => (
+                                      <option key={o} value={o}>{o}</option>
+                                    ))}
+                                  </select>
+                                ) : f.field_type === "textarea" ? (
+                                  <textarea 
+                                    className="form-input" 
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", outline: "none", height: "60px" }}
+                                    value={manualInputs[key] || ""} 
+                                    onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
                                   />
                                 ) : (
                                   <input 
                                     type="text" 
-                                    placeholder={`Enter ${displayName.replace(/\b\w/g, c => c.toUpperCase())}`}
                                     className="form-input" 
-                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", color: "var(--text-primary)", outline: "none" }}
+                                    style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", outline: "none" }}
                                     value={manualInputs[key] || ""} 
                                     onChange={(e) => setManualInputs({ ...manualInputs, [key]: e.target.value })}
-                                    onBlur={() => triggerRevalidateWithInputs(manualInputs)}
                                   />
                                 )}
                               </div>
@@ -1463,159 +1373,151 @@ export default function Home() {
                           </div>
                         );
                       })}
-                      
-                      {Object.entries(manualInputs).some(([k, v]) => {
-                        const currentVal = result.extracted_data[k];
-                        const compVal = v === "" ? null : (k === "amount" ? (isNaN(parseFloat(v)) ? v : parseFloat(v)) : v);
-                        return currentVal !== compVal;
-                      }) && (
-                        <button 
-                          className="btn-primary" 
-                          style={{ marginTop: "16px", width: "100%", justifyContent: "center", display: "flex", gap: "8px" }}
-                          onClick={handleUpdateAndRevalidate}
-                        >
-                          Update
-                        </button>
-                      )}
                     </div>
-                  </div>
 
-                  {/* Section 2: Validation Status */}
-                  <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                    <h3 style={{ fontSize: "16px", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px", marginBottom: "4px" }}>
-                      Field Validation Status
-                    </h3>
-                    
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {Object.entries(result.validation).map(([fieldName, validate]) => (
-                        <div 
-                          key={fieldName} 
-                          className={`validation-item ${validate.valid ? "valid" : "invalid"}`}
-                        >
-                          <span className="status-icon">
-                            {validate.valid ? <CheckIcon /> : "×"}
-                          </span>
-                          <div style={{ display: "flex", flexDirection: "column" }}>
-                            <span style={{ fontSize: "13px", fontWeight: 600, textTransform: "capitalize" }}>
-                              {fieldName === "accident_date" ? (
-                                (() => {
-                                  const currentPolicyType = manualInputs["policy_type"] || result.extracted_data["policy_type"];
-                                  const isAccPol = currentPolicyType === "Travel Insurance" || currentPolicyType === "Personal Accident Insurance" || currentPolicyType === "Motor/Auto Insurance" || currentPolicyType === "Health Insurance";
-                                  return isAccPol ? "Accident Date" : "Incident Date";
-                                })()
-                              ) : fieldName.replace(/_/g, " ")}
-                            </span>
-                            <span style={{ fontSize: "12px", color: validate.valid ? "var(--text-secondary)" : "#fca5a5" }}>
-                              {validate.message}
-                            </span>
-                          </div>
+                    {/* Inline "+ Add Custom Field" control */}
+                    {showAddFieldForm ? (
+                      <div className="glass-panel" style={{ padding: "16px", background: "rgba(15, 23, 42, 0.03)", border: "1px solid rgba(15, 23, 42, 0.1)", display: "flex", flexDirection: "column", gap: "12px", marginTop: "12px" }}>
+                        <h4 style={{ fontSize: "13.5px", fontWeight: 700 }}>Add Custom Field</h4>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)" }}>Field Label</label>
+                          <input 
+                            type="text"
+                            className="form-input"
+                            placeholder="e.g. Registration Status"
+                            style={{ width: "100%", padding: "8px 12px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", outline: "none", fontSize: "13px" }}
+                            value={newFieldLabel}
+                            onChange={(e) => setNewFieldLabel(e.target.value)}
+                          />
                         </div>
-                      ))}
-                    </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)" }}>Field Type</label>
+                          <select 
+                            className="form-input"
+                            style={{ width: "100%", padding: "8px 12px", background: "#ffffff", border: "1px solid rgba(15, 23, 42, 0.15)", borderRadius: "8px", outline: "none", fontSize: "13px" }}
+                            value={newFieldType}
+                            onChange={(e) => setNewFieldType(e.target.value)}
+                          >
+                            <option value="text">Text</option>
+                            <option value="date">Date</option>
+                            <option value="number">Number</option>
+                            <option value="email">Email</option>
+                          </select>
+                        </div>
+                        <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>
+                            <input type="checkbox" checked={newFieldRequired} onChange={(e) => setNewFieldRequired(e.target.checked)} />
+                            Required Field
+                          </label>
+                        </div>
+                        <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", marginTop: "4px" }}>
+                          <button type="button" className="btn-secondary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => setShowAddFieldForm(false)}>
+                            Cancel
+                          </button>
+                          <button type="button" className="btn-primary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={handleInlineCreateField}>
+                            Save Field
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button 
+                        className="btn-secondary"
+                        style={{ 
+                          marginTop: "12px", 
+                          width: "100%", 
+                          justifyContent: "center", 
+                          borderStyle: "dashed", 
+                          borderColor: "var(--accent-color)", 
+                          color: "var(--accent-color)",
+                          background: "var(--accent-glow)",
+                          fontWeight: 600,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px"
+                        }}
+                        onClick={() => {
+                          setNewFieldLabel("");
+                          setNewFieldType("text");
+                          setNewFieldRequired(false);
+                          setShowAddFieldForm(true);
+                        }}
+                      >
+                        <span style={{ fontSize: "16px", fontWeight: "bold" }}>+</span> Add Field
+                      </button>
+                    )}
+
+                    <button 
+                      className="btn-primary" 
+                      style={{ marginTop: "16px", width: "100%", justifyContent: "center" }}
+                      onClick={handleSaveUpdateDocument}
+                    >
+                      Save / Update
+                    </button>
                   </div>
 
+                  {/* Report Download controls */}
+                  <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>Status Check:</span>
+                      <span style={{ fontSize: "16px", fontWeight: 800, color: result.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)" }}>
+                        {result.overall_status === "ready_for_review" ? "Complete ✓" : "Needs Review ⚠"}
+                      </span>
+                    </div>
+                    <button
+                      className="btn-primary"
+                      style={{ width: "100%", justifyContent: "center" }}
+                      disabled={result.overall_status !== "ready_for_review" || isDownloading}
+                      onClick={handleDownloadUpdatedPdf}
+                    >
+                      {isDownloading ? <Spinner /> : "Download Updated PDF Copy"}
+                    </button>
+                  </div>
                 </div>
+
               </div>
-            )
+            </div>
           )
         )}
-
-        {/* SESSION HISTORY BAR: CURRENT SESSIONS CACHED RESULTS */}
-        {history.length > 0 && (
-          <div className="glass-panel" style={{ padding: "24px", marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "12px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <h3 style={{ fontSize: "16px", fontWeight: 600 }}>Processed Session Logs</h3>
-                <span style={{ fontSize: "12px", background: "rgba(255,255,255,0.08)", padding: "2px 8px", borderRadius: "999px", color: "var(--text-secondary)" }}>
-                  {history.length} items
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: "10px" }}>
-                <button 
-                  className="btn-primary" 
-                  style={{ 
-                    padding: "6px 12px", 
-                    fontSize: "12.5px", 
-                    background: "var(--accent-gradient)",
-                    border: "none",
-                    boxShadow: "0 2px 8px rgba(99, 102, 241, 0.15)"
-                  }}
-                  onClick={handleDownloadAllProcessedData}
-                  disabled={isDownloadingAll}
-                >
-                  {isDownloadingAll ? <Spinner /> : "Download All Processed Data"}
-                </button>
-                <button 
-                  className="btn-secondary" 
-                  style={{ 
-                    padding: "6px 12px", 
-                    fontSize: "12px", 
-                    borderColor: "rgba(220, 38, 38, 0.4)", 
-                    color: "#b91c1c", 
-                    fontWeight: 600,
-                    background: "rgba(220, 38, 38, 0.04)" 
-                  }}
-                  onClick={handleClearHistory}
-                >
-                  <TrashIcon /> Clear Session
-                </button>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "16px" }}>
-              {history.map((item) => (
-                <div 
-                  key={item.id}
-                  className="glass-panel"
-                  style={{ 
-                    padding: "16px", 
-                    cursor: "pointer", 
-                    background: "rgba(255,255,255,0.01)",
-                    borderLeft: `4px solid ${item.overall_status === "ready_for_review" ? "var(--valid-color)" : "var(--invalid-color)"}`
-                  }}
-                  onClick={() => handleSelectHistoryItem(item)}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)" }}>
-                      {item.industry}
-                    </span>
-                    <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{item.timestamp}</span>
-                  </div>
-                  
-                  <h4 style={{ fontSize: "13.5px", fontWeight: 600, marginTop: "6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {item.file_name}
-                  </h4>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "12px" }}>
-                    <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                      {item.overall_status === "ready_for_review" ? "✓ Validated" : "⚠ Needs Review"}
-                    </span>
-                    <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                      {item.overall_status === "ready_for_review" && (
-                        <button 
-                          style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "11px", color: "var(--accent-color)", fontWeight: 600, textDecoration: "underline", padding: 0 }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDownloadHistoryItemPdf(item);
-                          }}
-                        >
-                          Download
-                        </button>
-                      )}
-                      <span style={{ fontSize: "11px", color: "var(--accent-color)", fontWeight: 600 }}>Inspect &rarr;</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
       </main>
 
-      {/* Footer credits */}
-      <footer style={{ borderTop: "1px solid var(--panel-border)", padding: "20px 32px", textAlign: "center", fontSize: "12px", color: "var(--text-secondary)", background: "rgba(15, 23, 42, 0.02)", width: "100%", position: "relative", zIndex: 10 }}>
-        <p>© 2026 AI Document Automation MVP • Session results are stored in-memory only (cleared upon page exit or reload).</p>
+      {/* EMAIL RECIPIENT MODAL */}
+      {showEmailModal && (
+        <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", background: "rgba(15,23,42,0.4)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }}>
+          <div className="glass-panel" style={{ padding: "32px", maxWidth: "400px", width: "100%", margin: "20px", display: "flex", flexDirection: "column", gap: "20px" }}>
+            <div>
+              <h3 style={{ fontSize: "18px", fontWeight: 800 }}>Send processed report via email</h3>
+              <p style={{ fontSize: "13px", color: "var(--text-secondary)", marginTop: "4px" }}>Generate compiled report and email it securely to the recipient.</p>
+            </div>
+            <form onSubmit={handleSendEmail} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700 }}>Recipient Email Address</label>
+                <input 
+                  type="email" 
+                  required 
+                  placeholder="e.g. manager@company.com"
+                  style={{ width: "100%", padding: "10px", background: "#ffffff", border: "1px solid var(--panel-border)", borderRadius: "8px", outline: "none" }}
+                  value={recipientEmail}
+                  onChange={(e) => setRecipientEmail(e.target.value)}
+                />
+              </div>
+              <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                <button type="button" className="btn-secondary" style={{ padding: "8px 16px" }} onClick={() => setShowEmailModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn-primary" style={{ padding: "8px 16px" }} disabled={isSendingEmail}>
+                  {isSendingEmail ? <Spinner /> : "Send"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Footer Branding */}
+      <footer style={{ borderTop: "1px solid var(--panel-border)", padding: "20px 32px", textAlign: "center", marginTop: "auto", background: "rgba(255, 255, 255, 0.4)" }}>
+        <p style={{ fontSize: "12.5px", color: "#475569", fontWeight: 500 }}>
+          © {new Date().getFullYear()} AI Document Automation MVP. All Rights Reserved.
+        </p>
       </footer>
     </div>
   );

@@ -14,6 +14,28 @@ from backend.validators.deterministic import validate_date, validate_number, val
 
 client = TestClient(app)
 
+def get_auth_headers(email="test@user.com", name="Test User", role="user"):
+    # Clear user first if existing
+    from backend.services.database import get_db
+    with get_db() as conn:
+        conn.execute("DELETE FROM users WHERE email = ?", (email,))
+        conn.commit()
+    # Register
+    client.post("/api/auth/register", json={
+        "name": name,
+        "email": email,
+        "password": "Password123",
+        "confirm_password": "Password123"
+    })
+    # Login
+    login_response = client.post("/api/auth/login", json={
+        "email": email,
+        "password": "Password123"
+    })
+    token = login_response.json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 # Helper to get path of demo files
 DEMO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "demo-pdfs"))
 
@@ -132,12 +154,14 @@ def test_api_insurance_demo_success(mock_extract):
         }
     }
     
+    headers = get_auth_headers()
     pdf_path = os.path.join(DEMO_DIR, "insurance_demo.pdf")
     with open(pdf_path, "rb") as f:
         response = client.post(
             "/api/process-document",
             data={"industry": "insurance"},
-            files={"file": ("insurance_demo.pdf", f, "application/pdf")}
+            files={"file": ("insurance_demo.pdf", f, "application/pdf")},
+            headers=headers
         )
         
     assert response.status_code == 200
@@ -165,12 +189,14 @@ def test_api_insurance_negative_demo_needs_review(mock_extract):
         }
     }
     
+    headers = get_auth_headers()
     pdf_path = os.path.join(DEMO_DIR, "insurance_negative_demo.pdf")
     with open(pdf_path, "rb") as f:
         response = client.post(
             "/api/process-document",
             data={"industry": "insurance"},
-            files={"file": ("insurance_negative_demo.pdf", f, "application/pdf")}
+            files={"file": ("insurance_negative_demo.pdf", f, "application/pdf")},
+            headers=headers
         )
         
     assert response.status_code == 200
@@ -180,10 +206,12 @@ def test_api_insurance_negative_demo_needs_review(mock_extract):
     assert json_data["validation"]["accident_date"]["valid"] is False
 
 def test_api_invalid_file_format():
+    headers = get_auth_headers()
     response = client.post(
         "/api/process-document",
         data={"industry": "insurance"},
-        files={"file": ("test.txt", b"plain text content", "text/plain")}
+        files={"file": ("test.txt", b"plain text content", "text/plain")},
+        headers=headers
     )
     assert response.status_code == 400
     json_data = response.json()
@@ -192,11 +220,13 @@ def test_api_invalid_file_format():
 
 def test_api_file_too_large():
     # Mock file object that exceeds 10MB limit
+    headers = get_auth_headers()
     large_payload = b"0" * (10 * 1024 * 1024 + 10)
     response = client.post(
         "/api/process-document",
         data={"industry": "insurance"},
-        files={"file": ("large.pdf", large_payload, "application/pdf")}
+        files={"file": ("large.pdf", large_payload, "application/pdf")},
+        headers=headers
     )
     assert response.status_code == 400
     json_data = response.json()
@@ -204,10 +234,12 @@ def test_api_file_too_large():
     assert "10 mb or smaller" in json_data["error"].lower()
 
 def test_api_unsupported_industry():
+    headers = get_auth_headers()
     response = client.post(
         "/api/process-document",
         data={"industry": "unknown_industry"},
-        files={"file": ("insurance_demo.pdf", b"%PDF-1.4 mock content", "application/pdf")}
+        files={"file": ("insurance_demo.pdf", b"%PDF-1.4 mock content", "application/pdf")},
+        headers=headers
     )
     assert response.status_code == 400
     json_data = response.json()
@@ -379,7 +411,8 @@ def test_api_generate_combined_report_endpoint():
         ]
     }
     
-    response = client.post("/api/generate-combined-report", json=payload)
+    headers = get_auth_headers()
+    response = client.post("/api/generate-combined-report", json=payload, headers=headers)
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/pdf"
     assert "attachment" in response.headers["content-disposition"]
@@ -582,3 +615,243 @@ def test_provider_manager_gemini_unauthorized_does_not_fallback():
         assert excinfo.value.status_code == 401
         mock_groq.assert_not_called()
         mock_mistral.assert_not_called()
+
+
+# =====================================================================
+# 5. AUTHENTICATION & SECURITY ENHANCEMENTS TESTS
+# =====================================================================
+
+def test_user_registration_success():
+    email = "new_user@test.com"
+    # Clean first
+    from backend.services.database import get_db
+    with get_db() as conn:
+        conn.execute("DELETE FROM users WHERE email = ?", (email,))
+        conn.commit()
+        
+    response = client.post("/api/auth/register", json={
+        "name": "New User",
+        "email": email,
+        "password": "SecurePassword123",
+        "confirm_password": "SecurePassword123"
+    })
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+def test_user_registration_duplicate_email():
+    email = "new_user@test.com"
+    response = client.post("/api/auth/register", json={
+        "name": "New User",
+        "email": email,
+        "password": "SecurePassword123",
+        "confirm_password": "SecurePassword123"
+    })
+    assert response.status_code == 400
+    assert "exists" in response.json()["error"].lower()
+
+def test_user_registration_password_mismatch():
+    response = client.post("/api/auth/register", json={
+        "name": "Mismatch User",
+        "email": "mismatch@test.com",
+        "password": "SecurePassword123",
+        "confirm_password": "DifferentPassword123"
+    })
+    assert response.status_code == 400
+    assert "match" in response.json()["error"].lower()
+
+def test_user_login_success():
+    email = "new_user@test.com"
+    response = client.post("/api/auth/login", json={
+        "email": email,
+        "password": "SecurePassword123"
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "token" in data
+    assert data["email"] == email
+
+def test_user_login_wrong_password():
+    response = client.post("/api/auth/login", json={
+        "email": "new_user@test.com",
+        "password": "IncorrectPassword"
+    })
+    assert response.status_code == 401
+
+def test_unauthenticated_protected_api():
+    response = client.get("/api/documents")
+    assert response.status_code == 401
+
+def test_authenticated_protected_api():
+    headers = get_auth_headers(email="auth_user@test.com")
+    response = client.get("/api/documents", headers=headers)
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+def test_user_isolation_security():
+    headers_a = get_auth_headers(email="user_a@test.com")
+    headers_b = get_auth_headers(email="user_b@test.com")
+    
+    # Process doc for user A
+    pdf_path = os.path.join(DEMO_DIR, "insurance_demo.pdf")
+    with open(pdf_path, "rb") as f:
+        response_a = client.post(
+            "/api/process-document",
+            data={"industry": "insurance"},
+            files={"file": ("insurance_demo.pdf", f, "application/pdf")},
+            headers=headers_a
+        )
+    doc_id = response_a.json()["id"]
+    
+    # User B tries to update User A's document
+    response_b = client.post(
+        "/api/documents/update",
+        json={
+            "id": doc_id,
+            "extracted_data": {"customer_name": "Hack Attack"}
+        },
+        headers=headers_b
+    )
+    assert response_b.status_code == 403
+    assert "isolated" in response_b.json()["error"].lower()
+
+# =====================================================================
+# 6. DYNAMIC FIELD CONFIGURATION TESTS
+# =====================================================================
+
+def test_list_fields():
+    headers = get_auth_headers()
+    response = client.get("/api/fields", headers=headers)
+    assert response.status_code == 200
+    assert len(response.json()) > 0
+    assert "field_type" in response.json()[0]
+
+def test_create_and_toggle_field_admin_only():
+    headers_user = get_auth_headers(email="user@test.com", role="user")
+    headers_admin = get_auth_headers(email="admin@test.com", role="admin")
+    
+    # Make sure database roles are updated
+    from backend.services.database import get_db
+    with get_db() as conn:
+        conn.execute("UPDATE users SET role = 'admin' WHERE email = 'admin@test.com'")
+        conn.execute("DELETE FROM fields WHERE name = 'new_dynamic_field'")
+        conn.execute("DELETE FROM fields WHERE name = 'new_dynamic_field_admin'")
+        conn.commit()
+        
+    payload = {
+        "name": "new_dynamic_field",
+        "label": "New Dynamic Field",
+        "industry": "insurance",
+        "document_type": "vehicle_insurance_claim",
+        "field_type": "text",
+        "required": True,
+        "active": True,
+        "display_order": 100,
+        "validation_rules": "{}"
+    }
+    
+    # Regular user succeeds
+    res_user = client.post("/api/fields", json=payload, headers=headers_user)
+    assert res_user.status_code == 201
+    
+    # Admin succeeds
+    payload_admin = dict(payload)
+    payload_admin["name"] = "new_dynamic_field_admin"
+    res_admin = client.post("/api/fields", json=payload_admin, headers=headers_admin)
+    assert res_admin.status_code == 201
+    
+    # Check created field exists
+    fields_list = client.get("/api/fields", headers=headers_user).json()
+    field_item = next((f for f in fields_list if f["name"] == "new_dynamic_field"), None)
+    assert field_item is not None
+    field_id = field_item["id"]
+    
+    # Admin updates field
+    update_payload = {
+        "label": "Updated Dynamic Label",
+        "field_type": "text",
+        "required": False,
+        "active": True,
+        "display_order": 110,
+        "validation_rules": "{}"
+    }
+    res_update = client.put(f"/api/fields/{field_id}", json=update_payload, headers=headers_admin)
+    assert res_update.status_code == 200
+    
+    # Admin toggles active status
+    res_toggle = client.delete(f"/api/fields/{field_id}", headers=headers_admin)
+    assert res_toggle.status_code == 200
+    assert "disabled" in res_toggle.json()["message"]
+
+# =====================================================================
+# 7. MANUAL UPDATE CORRECTIONS & EMAIL DISPATCH TESTS
+# =====================================================================
+
+@patch("backend.api.endpoints.extract_document_info")
+def test_manual_correction_and_revalidation(mock_extract):
+    mock_extract.return_value = {
+        "document_type": "insurance_policy_or_claim",
+        "extracted_fields": {
+            "customer_name": {"value": "John Smith", "applicable": True},
+            "policy_number": {"value": "POL12345", "applicable": True},
+            "policy_type": {"value": "Health Insurance", "applicable": True},
+            "policy_start_date": {"value": "2026-01-01", "applicable": True},
+            "policy_end_date": {"value": "2026-12-31", "applicable": True},
+            "coverage_amount": {"value": "$5000", "applicable": True},
+            "accident_date": {"value": "2026-08-10", "applicable": True},
+            "claim_type": {"value": "Car Accident", "applicable": True}
+        }
+    }
+    
+    headers = get_auth_headers()
+    
+    # Process document
+    pdf_path = os.path.join(DEMO_DIR, "insurance_demo.pdf")
+    with open(pdf_path, "rb") as f:
+        proc_res = client.post(
+            "/api/process-document",
+            data={"industry": "insurance"},
+            files={"file": ("insurance_demo.pdf", f, "application/pdf")},
+            headers=headers
+        )
+    doc_id = proc_res.json()["id"]
+    
+    # Perform manual correction
+    corr_res = client.post(
+        "/api/documents/update",
+        json={
+            "id": doc_id,
+            "extracted_data": {
+                "customer_name": "Manual Corrected Name",
+                "policy_number": "POL-CORRECTED",
+                "policy_type": "Motor/Auto Insurance",
+                "policy_start_date": "2026-05-15",
+                "policy_end_date": "2027-05-15",
+                "coverage_amount": "$10000",
+                "accident_date": "2026-08-11",
+                "claim_type": "Windshield Damage"
+            }
+        },
+        headers=headers
+    )
+    assert corr_res.status_code == 200
+    json_data = corr_res.json()
+    assert json_data["extracted_data"]["customer_name"] == "Manual Corrected Name"
+    assert json_data["validation"]["policy_number"]["valid"] is True
+    assert json_data["overall_status"] == "ready_for_review"
+
+def test_api_send_email_validation():
+    headers = get_auth_headers()
+    
+    # Invalid email format
+    response = client.post(
+        "/api/send-email",
+        json={
+            "recipient_email": "invalid_email_format",
+            "items": []
+        },
+        headers=headers
+    )
+    assert response.status_code == 400
+    assert "email" in response.json()["error"].lower()
+

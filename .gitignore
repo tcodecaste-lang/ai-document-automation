@@ -14,3 +14,11 @@ frontend/out/
 # OS
 .DS_Store
 Thumbs.db
+
+# Databases
+*.db
+backend/database.db
+
+# Local Email Deliveries
+sent_emails/
+backend/sent_emails/

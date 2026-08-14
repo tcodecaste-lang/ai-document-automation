@@ -143,36 +143,58 @@ class GeminiProvider(AIProvider):
         return client, model_name
 
     def extract(self, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
-        try:
-            client, model_name = self.get_client_and_model()
-            logger.info("[AI] Gemini request started")
+        client, initial_model = self.get_client_and_model()
+        
+        is_gemini_api = False
+        if hasattr(client, "base_url") and "generativelanguage" in str(client.base_url):
+            is_gemini_api = True
             
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": response_schema
-                },
-                temperature=0.0,
-                timeout=30.0
-            )
+        models_to_try = [initial_model]
+        if is_gemini_api:
+            # Alternate Gemini models to fall back to in case of rate limits / quotas
+            models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.7-flash"]
             
-            raw_content = response.choices[0].message.content
-            if not raw_content:
-                raise RecoverableProviderError("Gemini returned an empty response.", cooldown_seconds=60)
+        last_exception = None
+        for model in models_to_try:
+            try:
+                logger.info(f"[AI] Gemini attempting model: {model}")
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": response_schema
+                    },
+                    temperature=0.0,
+                    timeout=30.0
+                )
                 
-            extracted_data = json.loads(raw_content)
-            if isinstance(extracted_data, dict):
-                extracted_data["ai_provider"] = "Gemini"
-            logger.info("[AI] Gemini request successful")
-            return extracted_data
-            
-        except Exception as e:
-            self._handle_exception(e, "Gemini")
+                raw_content = response.choices[0].message.content
+                if not raw_content:
+                    raise RecoverableProviderError(f"Gemini model {model} returned an empty response.", cooldown_seconds=60)
+                    
+                extracted_data = json.loads(raw_content)
+                if isinstance(extracted_data, dict):
+                    extracted_data["ai_provider"] = "Gemini"
+                logger.info(f"[AI] Gemini request successful with model: {model}")
+                return extracted_data
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_quota = "quota" in err_msg or "limit" in err_msg or "exhausted" in err_msg or "rate" in err_msg or "resource_exhausted" in err_msg or "429" in err_msg
+                if is_quota and len(models_to_try) > 1:
+                    logger.warning(f"[AI] Gemini model {model} hit rate limit or daily quota. Trying next alternate...")
+                    last_exception = e
+                    continue
+                else:
+                    self._handle_exception(e, "Gemini")
+                    
+        if last_exception:
+            self._handle_exception(last_exception, "Gemini")
+        else:
+            raise RecoverableProviderError("All Gemini models failed to respond.", cooldown_seconds=60)
 
 class GroqProvider(AIProvider):
     def get_client_and_model(self) -> tuple[OpenAI, str]:

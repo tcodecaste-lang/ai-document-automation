@@ -17,6 +17,7 @@ class DocumentProcessResponse(BaseModel):
     validation: Dict[str, FieldValidation] = Field(..., description="Field-by-field validation results")
     overall_status: str = Field(..., description="Aggregated validation status: ready_for_review or needs_review")
     ai_provider: Optional[str] = Field(None, description="The name of the AI engine used to process the document")
+    id: Optional[str] = Field(None, description="The stored database document identifier")
 
 class ErrorResponse(BaseModel):
     success: bool = Field(False)
@@ -33,3 +34,53 @@ class GeneratePdfRequest(BaseModel):
 
 class CombinedReportRequest(BaseModel):
     items: List[GeneratePdfRequest] = Field(..., description="List of all successfully processed documents in the session")
+
+# Authentication schemas
+class UserRegisterRequest(BaseModel):
+    name: str = Field(..., min_length=2)
+    email: str = Field(...)
+    password: str = Field(..., min_length=6)
+    confirm_password: str = Field(...)
+
+class UserLoginRequest(BaseModel):
+    email: str = Field(...)
+    password: str = Field(...)
+
+class AuthResponse(BaseModel):
+    success: bool
+    token: str
+    name: str
+    email: str
+    role: str
+
+# Dynamic Fields schemas
+class FieldCreateRequest(BaseModel):
+    name: str = Field(...)
+    label: str = Field(...)
+    industry: str = Field(...)
+    document_type: str = Field(...)
+    field_type: str = Field(...)
+    required: bool = Field(False)
+    active: bool = Field(True)
+    display_order: int = Field(0)
+    validation_rules: Optional[str] = Field("{}")
+
+class FieldUpdateRequest(BaseModel):
+    label: str = Field(...)
+    field_type: str = Field(...)
+    required: bool = Field(False)
+    active: bool = Field(True)
+    display_order: int = Field(0)
+    validation_rules: Optional[str] = Field("{}")
+    industry: Optional[str] = Field(None)
+    document_type: Optional[str] = Field(None)
+
+# Document Manual Update schema
+class DocumentUpdateRequest(BaseModel):
+    id: str = Field(..., description="The unique document identifier")
+    extracted_data: Dict[str, Any] = Field(..., description="Manually edited key-value fields")
+
+# Email Send schema
+class SendEmailRequest(BaseModel):
+    recipient_email: str = Field(...)
+    items: List[GeneratePdfRequest] = Field(...)
