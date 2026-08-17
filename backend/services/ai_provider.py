@@ -151,8 +151,15 @@ class GeminiProvider(AIProvider):
             
         models_to_try = [initial_model]
         if is_gemini_api:
-            # Alternate Gemini models to fall back to in case of rate limits / quotas
-            models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.7-flash"]
+            # Real valid Gemini model names - ordered by preference (newest/best first)
+            models_to_try = [
+                "gemini-2.5-flash",          # Latest & fastest (free tier)
+                "gemini-2.5-flash-lite",     # Lightweight variant
+                "gemini-2.0-flash",          # Stable previous gen
+                "gemini-2.0-flash-lite",     # Lightweight previous gen
+                "gemini-1.5-flash",          # Widely available fallback
+                "gemini-1.5-flash-8b",       # Smallest, most lenient quota
+            ]
             
         last_exception = None
         for model in models_to_try:
@@ -184,8 +191,10 @@ class GeminiProvider(AIProvider):
             except Exception as e:
                 err_msg = str(e).lower()
                 is_quota = "quota" in err_msg or "limit" in err_msg or "exhausted" in err_msg or "rate" in err_msg or "resource_exhausted" in err_msg or "429" in err_msg
-                if is_quota and len(models_to_try) > 1:
-                    logger.warning(f"[AI] Gemini model {model} hit rate limit or daily quota. Trying next alternate...")
+                is_model_invalid = "not found" in err_msg or "does not exist" in err_msg or "invalid model" in err_msg or "404" in err_msg
+                if (is_quota or is_model_invalid) and len(models_to_try) > 1:
+                    reason = "rate limit/quota" if is_quota else "model not found"
+                    logger.warning(f"[AI] Gemini model {model} skipped ({reason}). Trying next...")
                     last_exception = e
                     continue
                 else:
