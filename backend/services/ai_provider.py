@@ -189,9 +189,18 @@ class GeminiProvider(AIProvider):
             except Exception as e:
                 err_msg = str(e).lower()
                 is_quota = "quota" in err_msg or "limit" in err_msg or "exhausted" in err_msg or "rate" in err_msg or "resource_exhausted" in err_msg or "429" in err_msg
-                is_model_invalid = "not found" in err_msg or "does not exist" in err_msg or "invalid model" in err_msg or "404" in err_msg
+                is_model_invalid = (
+                    "not found" in err_msg or 
+                    "does not exist" in err_msg or 
+                    "invalid model" in err_msg or 
+                    "404" in err_msg or 
+                    "decommissioned" in err_msg or 
+                    "not supported" in err_msg or 
+                    "deprecated" in err_msg or 
+                    "400" in err_msg
+                )
                 if (is_quota or is_model_invalid) and len(models_to_try) > 1:
-                    reason = "rate limit/quota" if is_quota else "model not found"
+                    reason = "rate limit/quota" if is_quota else "model invalid/unsupported"
                     logger.warning(f"[AI] Gemini model {model} skipped ({reason}). Trying next...")
                     last_exception = e
                     continue
@@ -265,9 +274,18 @@ class GroqProvider(AIProvider):
             except Exception as e:
                 err_msg = str(e).lower()
                 is_quota = "quota" in err_msg or "limit" in err_msg or "exhausted" in err_msg or "rate" in err_msg or "resource_exhausted" in err_msg or "429" in err_msg
-                is_model_invalid = "not found" in err_msg or "does not exist" in err_msg or "invalid model" in err_msg or "404" in err_msg
+                is_model_invalid = (
+                    "not found" in err_msg or 
+                    "does not exist" in err_msg or 
+                    "invalid model" in err_msg or 
+                    "404" in err_msg or 
+                    "decommissioned" in err_msg or 
+                    "not supported" in err_msg or 
+                    "deprecated" in err_msg or 
+                    "400" in err_msg
+                )
                 if (is_quota or is_model_invalid) and len(models_to_try) > 1:
-                    reason = "rate limit/quota" if is_quota else "model not found"
+                    reason = "rate limit/quota" if is_quota else "model invalid/unsupported"
                     logger.warning(f"[AI] Groq model {model} skipped ({reason}). Trying next...")
                     last_exception = e
                     continue
