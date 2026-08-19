@@ -135,7 +135,7 @@ class GeminiProvider(AIProvider):
                 api_key=api_key,
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
             )
-            model_name = "gemini-3.5-flash"
+            model_name = "gemini-3.6-flash"
         else:
             client = OpenAI(api_key=api_key)
             model_name = "gpt-4o-mini"
@@ -153,10 +153,10 @@ class GeminiProvider(AIProvider):
         if is_gemini_api:
             # Real valid Gemini model names - ordered by preference (newest/best first)
             models_to_try = [
-                "gemini-2.5-flash",          # Latest & fastest
-                "gemini-2.0-flash",          # Stable previous gen
-                "gemini-1.5-flash",          # Widely available fallback
-                "gemini-1.5-pro",            # High intelligence fallback
+                "gemini-3.6-flash",          # Active working model
+                "gemini-3.5-flash",          # Alternative working model
+                "gemini-3.7-flash",          # Alternative working model
+                "gemini-2.5-flash-lite",     # Lite fallback
             ]
             
         last_exception = None
