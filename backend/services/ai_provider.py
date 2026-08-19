@@ -223,36 +223,62 @@ class GroqProvider(AIProvider):
         return client, "llama-3.3-70b-versatile"
 
     def extract(self, industry: str, text: str, response_schema: dict, system_prompt: str, user_prompt: str) -> dict:
-        try:
-            client, model_name = self.get_client_and_model()
-            logger.info("[AI] Groq request started")
-            
-            schema_instruction = f"\n\nYou MUST return a JSON object strictly matching this JSON schema structure:\n{json.dumps(response_schema.get('schema', response_schema))}"
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt + schema_instruction},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={
-                    "type": "json_object"
-                },
-                temperature=0.0,
-                timeout=30.0
-            )
-            
-            raw_content = response.choices[0].message.content
-            if not raw_content:
-                raise RecoverableProviderError("Groq returned an empty response.", cooldown_seconds=60)
+        client, initial_model = self.get_client_and_model()
+        
+        models_to_try = [
+            initial_model,                # "llama-3.3-70b-versatile"
+            "llama-3.3-70b-specdec",      # Fast speculative decoding version
+            "qwen/qwen3.6-27b",           # High quality Qwen model (if key has custom access)
+            "groq/compound-mini",         # Groq's custom agentic mini model
+            "llama3-70b-8192",            # Older generation stable
+            "mixtral-8x7b-32768",         # Mixtral fallback
+        ]
+        
+        last_exception = None
+        for model in models_to_try:
+            try:
+                logger.info(f"[AI] Groq attempting model: {model}")
+                schema_instruction = f"\n\nYou MUST return a JSON object strictly matching this JSON schema structure:\n{json.dumps(response_schema.get('schema', response_schema))}"
                 
-            extracted_data = json.loads(raw_content)
-            if isinstance(extracted_data, dict):
-                extracted_data["ai_provider"] = "Groq"
-            logger.info("[AI] Groq request successful")
-            return extracted_data
-            
-        except Exception as e:
-            self._handle_exception(e, "Groq")
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt + schema_instruction},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={
+                        "type": "json_object"
+                    },
+                    temperature=0.0,
+                    timeout=30.0
+                )
+                
+                raw_content = response.choices[0].message.content
+                if not raw_content:
+                    raise RecoverableProviderError(f"Groq model {model} returned an empty response.", cooldown_seconds=60)
+                    
+                extracted_data = json.loads(raw_content)
+                if isinstance(extracted_data, dict):
+                    extracted_data["ai_provider"] = "Groq"
+                logger.info(f"[AI] Groq request successful with model: {model}")
+                return extracted_data
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_quota = "quota" in err_msg or "limit" in err_msg or "exhausted" in err_msg or "rate" in err_msg or "resource_exhausted" in err_msg or "429" in err_msg
+                is_model_invalid = "not found" in err_msg or "does not exist" in err_msg or "invalid model" in err_msg or "404" in err_msg
+                if (is_quota or is_model_invalid) and len(models_to_try) > 1:
+                    reason = "rate limit/quota" if is_quota else "model not found"
+                    logger.warning(f"[AI] Groq model {model} skipped ({reason}). Trying next...")
+                    last_exception = e
+                    continue
+                else:
+                    self._handle_exception(e, "Groq")
+                    
+        if last_exception:
+            logger.warning(f"[AI] All Groq models failed. Last error: {str(last_exception)}. Falling back to Mistral...")
+            raise RecoverableProviderError(f"All Groq models failed: {str(last_exception)}", cooldown_seconds=60)
+        else:
+            raise RecoverableProviderError("All Groq models failed to respond.", cooldown_seconds=60)
 
 class MistralProvider(AIProvider):
     def get_client_and_model(self) -> tuple[OpenAI, str]:
