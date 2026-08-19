@@ -153,12 +153,10 @@ class GeminiProvider(AIProvider):
         if is_gemini_api:
             # Real valid Gemini model names - ordered by preference (newest/best first)
             models_to_try = [
-                "gemini-2.5-flash",          # Latest & fastest (free tier)
-                "gemini-2.5-flash-lite",     # Lightweight variant
+                "gemini-2.5-flash",          # Latest & fastest
                 "gemini-2.0-flash",          # Stable previous gen
-                "gemini-2.0-flash-lite",     # Lightweight previous gen
                 "gemini-1.5-flash",          # Widely available fallback
-                "gemini-1.5-flash-8b",       # Smallest, most lenient quota
+                "gemini-1.5-pro",            # High intelligence fallback
             ]
             
         last_exception = None
@@ -201,7 +199,11 @@ class GeminiProvider(AIProvider):
                     self._handle_exception(e, "Gemini")
                     
         if last_exception:
-            self._handle_exception(last_exception, "Gemini")
+            # If we exhausted all models (due to rate limits or 404 not found), 
+            # we must raise RecoverableProviderError to trigger Groq fallback,
+            # instead of letting _handle_exception raise a fatal HTTPException.
+            logger.warning(f"[AI] All Gemini models failed. Last error: {str(last_exception)}. Falling back to Groq...")
+            raise RecoverableProviderError(f"All Gemini models failed: {str(last_exception)}", cooldown_seconds=60)
         else:
             raise RecoverableProviderError("All Gemini models failed to respond.", cooldown_seconds=60)
 
